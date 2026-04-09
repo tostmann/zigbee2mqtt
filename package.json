@@ -22,6 +22,7 @@
         "cc2531"
     ],
     "scripts": {
+        "postinstall": "node scripts/patch_zboss.js",
         "build": "tsc && node index.js writehash",
         "build:types": "pnpm run clean && tsc --project tsconfig.types.json && cp lib/util/settings.schema.json dist/util",
         "build:watch": "tsc --watch",
