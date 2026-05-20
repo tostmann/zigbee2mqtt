@@ -107,8 +107,8 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", zbossAdapterPatch);
 // "Driver reset -> Form network" without the prior 10 s timeout.
 applyPatch("adapter/zboss/uart.js", [
     [
-        `    async onPackage(data) {\n        if (this.inReset)\n            return;\n        const len = data.readUInt16LE(0);`,
-        `    async onPackage(data) {\n        // PATCHED: do NOT drop frames during inReset. See scripts/patch_zboss.js\n        // for rationale (ESP32-C6 USB-Serial-JTAG persists across esp_restart so\n        // onPortClose may never fire to clear inReset; CRC checks below reject\n        // any garbage that arrives during the reset window).\n        const len = data.readUInt16LE(0);`,
+        "    async onPackage(data) {\n        if (this.inReset)\n            return;\n        const len = data.readUInt16LE(0);",
+        "    async onPackage(data) {\n        // PATCHED: do NOT drop frames during inReset. See scripts/patch_zboss.js\n        // for rationale (ESP32-C6 USB-Serial-JTAG persists across esp_restart so\n        // onPortClose may never fire to clear inReset; CRC checks below reject\n        // any garbage that arrives during the reset window).\n        const len = data.readUInt16LE(0);",
     ],
 ]);
 
