@@ -70,4 +70,46 @@ const zbossAdapterPatch = [
 ];
 
 applyPatch("adapter/zboss/adapter/zbossAdapter.js", zbossAdapterPatch);
+
+// Stop dropping inbound frames while ZBOSSDriver.reset() is awaiting the
+// NCP_RESET response. Original behaviour (uart.js:onPackage):
+//
+//     async onPackage(data) {
+//         if (this.inReset) return;
+//         ...
+//
+// dropped EVERY frame received between `reset()` setting inReset=true and
+// onPortClose clearing it. On ESP32-C6 USB-Serial-JTAG the device's USB CDC
+// endpoint persists across `esp_restart()` (the ROM bootloader re-attaches
+// the same descriptor essentially instantly), so the host doesn't reliably
+// see a port-close to trigger onPortClose -> inReset never clears -> the
+// device's tsn-matching NCP_RESET response AND the post-reboot boot-ready
+// frame (commandId=2, tsn=0xFF sentinel) both get silently dropped. Result:
+// reset() times out at 10 s, z2m exits with "Failed to start zigbee-herdsman"
+// any time the user's configuration.yaml channel/panID doesn't match the
+// device's persisted network (= the FactoryReset path).
+//
+// Even the firmware-side USB phy detach in tostmann/esp-coordinator (clears
+// DP_PULLUP + USB_PAD_ENABLE for 800 ms in the NCP_RESET deferred task)
+// doesn't fully close the loop: the tsn-matching response was already dropped
+// before the detach, and the post-reboot boot-ready frame arrives inside the
+// ~3 s reopen wait inside onPortClose while the host port is closed. The
+// proper fix is here, in the host parser.
+//
+// The CRC8/CRC16 checks further down in onPackage already reject any garbage
+// that arrives during the reset window (ROM banner ASCII, partial frames,
+// electrical noise), so removing the drop is safe. driver.js execCommand
+// already uses `tsn: undefined` wildcard for NCP_RESET (see ~line 235), so
+// either the original response or the boot-ready frame satisfies the pending
+// waiter as soon as it reaches onFrame.
+//
+// Verified live 2026-05-20: factory-reset path now passes through
+// "Driver reset -> Form network" without the prior 10 s timeout.
+applyPatch("adapter/zboss/uart.js", [
+    [
+        `    async onPackage(data) {\n        if (this.inReset)\n            return;\n        const len = data.readUInt16LE(0);`,
+        `    async onPackage(data) {\n        // PATCHED: do NOT drop frames during inReset. See scripts/patch_zboss.js\n        // for rationale (ESP32-C6 USB-Serial-JTAG persists across esp_restart so\n        // onPortClose may never fire to clear inReset; CRC checks below reject\n        // any garbage that arrives during the reset window).\n        const len = data.readUInt16LE(0);`,
+    ],
+]);
+
 console.log("[ZBOSS Patch] Done.");
