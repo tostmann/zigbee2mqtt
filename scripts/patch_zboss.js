@@ -71,7 +71,6 @@ const zbossAdapterPatch = [
 
 applyPatch("adapter/zboss/adapter/zbossAdapter.js", zbossAdapterPatch);
 
-
 // ---------------------------------------------------------------------------
 // Structured-backup upgrade (firmware v1.2.0+):
 //
@@ -106,11 +105,10 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", zbossAdapterPatch);
 applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
     [
         // Anchor: the raw-NVS-only backup() body as left by the patch above.
-        `    async backup(_ieeeAddressesInDatabase) {\n        return await this.queue.execute(async () => {\n            try {\n                let offset = 0;`,
+        "    async backup(_ieeeAddressesInDatabase) {\n        return await this.queue.execute(async () => {\n            try {\n                let offset = 0;",
         `    async backup(_ieeeAddressesInDatabase) {\n        return await this.queue.execute(async () => {\n            // Hybrid backup: try the structured command first to populate the\n            // human-readable + portable fields (live NWK key, live frame counter,\n            // device list). Failure is non-fatal; raw_nvram below is the\n            // authoritative restore source.\n            let _structured = null;\n            try {\n                const res = await this.driver.execCommand(155 /* GET_STRUCTURED_BACKUP */, {});\n                if (res.payload.status === enums_1.StatusCodeGeneric.OK && res.payload.magic === 0x4253425A) {\n                    const tlvs = Buffer.from(res.payload.tlvs);\n                    const f = {};\n                    let p = 0;\n                    while (p + 3 <= tlvs.length) {\n                        const tag = tlvs[p]; const tlen = tlvs[p+1] | (tlvs[p+2] << 8); p += 3;\n                        const val = tlvs.slice(p, p + tlen); p += tlen;\n                        switch (tag) {\n                            case 0x01: f.pan_id = val.readUInt16LE(0); break;\n                            case 0x02: f.extended_pan_id = Buffer.from(val); break;\n                            case 0x03: f.channel = val[0]; break;\n                            case 0x04: f.network_update_id = val[0]; break;\n                            case 0x05: f.coordinator_ieee = Buffer.from(val); break;\n                            case 0x06: f.network_key = Buffer.from(val); break;\n                            case 0x08: f.frame_counter = val.readUInt32LE(0); break;\n                            case 0x10: {\n                                f.devices = [];\n                                for (let i = 0; i + 16 <= val.length; i += 16) {\n                                    f.devices.push({\n                                        networkAddress: val.readUInt16LE(i+8),\n                                        ieeeAddress: Buffer.from(val.slice(i, i+8)),\n                                        isDirectChild: true,\n                                    });\n                                }\n                                break;\n                            }\n                        }\n                    }\n                    _structured = f;\n                    logger_1.logger.info(\`Hybrid backup: structured pan=0x\${(f.pan_id||0).toString(16)} ch=\${f.channel} key=\${f.network_key?'yes':'no'} fc=\${f.frame_counter} devs=\${f.devices?f.devices.length:0}\`, NS);\n                }\n            } catch (e) {\n                logger_1.logger.info(\`Structured-backup capture failed (\${e.message}), continuing with raw-only\`, NS);\n            }\n            try {\n                let offset = 0;`,
     ],
 ]);
-
 
 // Augment the returned backup object with structured fields if we collected
 // any. The raw-NVS code above ended with:
@@ -120,11 +118,10 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
 // present (frame_counter is the most valuable — was hardcoded 0 in raw-only).
 applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
     [
-        `                    securityLevel: 5,\n                    networkUpdateId: 0,\n                    devices: []\n                };\n                return backup;`,
-        `                    securityLevel: 5,\n                    networkUpdateId: 0,\n                    devices: []\n                };\n                if (_structured) {\n                    if (_structured.network_key) backup.networkOptions.networkKey = _structured.network_key;\n                    if (_structured.frame_counter != null) backup.networkKeyInfo.frameCounter = _structured.frame_counter;\n                    if (_structured.network_update_id != null) backup.networkUpdateId = _structured.network_update_id;\n                    if (_structured.devices) backup.devices = _structured.devices;\n                    if (_structured.coordinator_ieee) backup.coordinatorIeeeAddress = _structured.coordinator_ieee;\n                }\n                return backup;`,
+        "                    securityLevel: 5,\n                    networkUpdateId: 0,\n                    devices: []\n                };\n                return backup;",
+        "                    securityLevel: 5,\n                    networkUpdateId: 0,\n                    devices: []\n                };\n                if (_structured) {\n                    if (_structured.network_key) backup.networkOptions.networkKey = _structured.network_key;\n                    if (_structured.frame_counter != null) backup.networkKeyInfo.frameCounter = _structured.frame_counter;\n                    if (_structured.network_update_id != null) backup.networkUpdateId = _structured.network_update_id;\n                    if (_structured.devices) backup.devices = _structured.devices;\n                    if (_structured.coordinator_ieee) backup.coordinatorIeeeAddress = _structured.coordinator_ieee;\n                }\n                return backup;",
     ],
 ]);
-
 
 // Stop dropping inbound frames while ZBOSSDriver.reset() is awaiting the
 // NCP_RESET response. Original behaviour (uart.js:onPackage):
