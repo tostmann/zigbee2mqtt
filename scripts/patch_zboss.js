@@ -164,4 +164,32 @@ applyPatch("adapter/zboss/uart.js", [
     ],
 ]);
 
+// ---------------------------------------------------------------------------
+// wifi-coex transport tolerance (tostmann/esp-coordinator wifi-coex variant):
+// when the NCP runs over a raw TCP server on a single ESP32-C6 that time-shares
+// one 2.4 GHz radio with the always-RX Zigbee coordinator, host<->NCP round-trips
+// spike to several seconds (C1/"unstable" coex). herdsman's two fixed timeouts
+// (link-layer ACK wait + command response wait) then abort z2m startup. Raise
+// both. Harmless on the fast USB transport. Tunable; 30 s validated end-to-end.
+// ---------------------------------------------------------------------------
+applyPatch("adapter/zboss/uart.js", [
+    ["waitFor(sequence, timeout = 2000)", "waitFor(sequence, timeout = 30000)"],
+]);
+applyPatch("adapter/zboss/driver.js", [
+    ["execCommand(commandId, params = {}, timeout = 10000)", "execCommand(commandId, params = {}, timeout = 30000)"],
+]);
+
+// wifi-coex backup fallback: the raw 40 KB NVRAM pull (320 chunks even at the
+// firmware's 1 KB chunk size) is unreliable over the coex/TCP link. The
+// structured backup (GET_STRUCTURED_BACKUP, one small frame) succeeds reliably.
+// If the raw pull throws, fall back to a structured-only Universal-NWK backup so
+// z2m STARTS instead of crash-looping. Restore from such a backup is degraded
+// (no raw_nvram -> may need re-pair) but the coordinator runs.
+applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
+    [
+        "            } catch (error) {\n                throw new Error(`Backup failed: ${error.message}`);\n            }",
+        `            } catch (error) {\n                if (_structured && _structured.network_key) {\n                    logger_1.logger.info(\`Raw NVRAM backup failed over this link (\${error.message}); using structured-only backup (restore may need re-pair)\`, NS);\n                    const netInfo = this.driver.netInfo;\n                    return {\n                        coordinatorIeeeAddress: _structured.coordinator_ieee || Buffer.from(netInfo.ieeeAddr.replace("0x", ""), "hex").reverse(),\n                        networkOptions: {\n                            panId: netInfo.network.panID,\n                            extendedPanId: Buffer.from(netInfo.network.extendedPanID),\n                            channelList: [netInfo.network.channel],\n                            networkKey: _structured.network_key,\n                            networkKeyDistribute: false\n                        },\n                        logicalChannel: netInfo.network.channel,\n                        networkKeyInfo: { sequenceNumber: 0, frameCounter: _structured.frame_counter || 0 },\n                        securityLevel: 5,\n                        networkUpdateId: _structured.network_update_id || 0,\n                        devices: _structured.devices || []\n                    };\n                }\n                throw new Error(\`Backup failed: \${error.message}\`);\n            }`,
+    ],
+]);
+
 console.log("[ZBOSS Patch] Done.");
