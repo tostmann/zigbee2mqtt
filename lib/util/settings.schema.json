@@ -808,6 +808,13 @@
                     "title": "MQTT output type",
                     "description": "Examples when 'state' of a device is published json: topic: 'zigbee2mqtt/my_bulb' payload '{\"state\": \"ON\"}' attribute: topic 'zigbee2mqtt/my_bulb/state' payload 'ON' attribute_and_json: both json and attribute (see above)",
                     "default": "json"
+                },
+                "enable_external_js": {
+                    "type": "boolean",
+                    "title": "Enable external JS",
+                    "description": "Enable external JavaScript (extensions and converters) that can execute arbitrary user-provided code. WARNING: If unused, it is advised to disable this.",
+                    "default": true,
+                    "requiresRestart": true
                 }
             }
         },
@@ -848,7 +855,8 @@
                 "retain": {
                     "type": "boolean",
                     "title": "Retain",
-                    "description": "Retain MQTT messages of this device"
+                    "description": "Retain MQTT messages of this device",
+                    "default": false
                 },
                 "disabled": {
                     "type": "boolean",
@@ -953,10 +961,16 @@
                     "type": "string"
                 },
                 "retain": {
-                    "type": "boolean"
+                    "type": "boolean",
+                    "title": "Retain",
+                    "description": "Retain MQTT messages of this group",
+                    "default": false
                 },
                 "optimistic": {
-                    "type": "boolean"
+                    "type": "boolean",
+                    "title": "Optimistic",
+                    "description": "Publish the expected state of group members after set",
+                    "default": true
                 },
                 "qos": {
                     "type": ["number"],
