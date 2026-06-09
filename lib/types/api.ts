@@ -677,6 +677,14 @@ export interface Zigbee2MQTTAPI {
         default_maximum_data_size?: number | null;
     };
 
+    "bridge/request/device/ota_update/update/abort": {
+        id: string;
+    };
+
+    "bridge/response/device/ota_update/update/abort": {
+        id: string;
+    };
+
     "bridge/response/device/ota_update/update": {
         id: string;
         from:
@@ -1001,6 +1009,7 @@ export type Zigbee2MQTTRequestEndpoints =
     | "bridge/request/device/ota_update/check/downgrade"
     | "bridge/request/device/ota_update/update"
     | "bridge/request/device/ota_update/update/downgrade"
+    | "bridge/request/device/ota_update/update/abort"
     | "bridge/request/device/ota_update/schedule"
     | "bridge/request/device/ota_update/schedule/downgrade"
     | "bridge/request/device/ota_update/unschedule"
@@ -1050,6 +1059,7 @@ export type Zigbee2MQTTResponseEndpoints =
     | "bridge/response/device/remove"
     | "bridge/response/device/ota_update/check"
     | "bridge/response/device/ota_update/update"
+    | "bridge/response/device/ota_update/update/abort"
     | "bridge/response/device/ota_update/schedule"
     | "bridge/response/device/ota_update/unschedule"
     | "bridge/response/device/interview"
