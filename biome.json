@@ -12,7 +12,7 @@
         "bracketSpacing": false
     },
     "files": {
-        "includes": ["**", "!package.json", "!!**/dist", "!!**/coverage"]
+        "includes": ["**", "!package.json", "!scripts/patch_zboss.js", "!!**/dist", "!!**/coverage"]
     },
     "linter": {
         "includes": ["**"],
