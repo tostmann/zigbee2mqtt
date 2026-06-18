@@ -158,63 +158,12 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
     ],
 ]);
 
-// ---------------------------------------------------------------------------
-// wifi-coex TCP recovery — backport of Koenkk/zigbee-herdsman#1779
-// "fix(zboss): emit disconnected on unexpected port close" (not yet in a
-// herdsman release; mapped onto the compiled 10.4.0 dist). When the NCP runs
-// over a raw TCP server on a single ESP32-C6 (coex Mode B) and the socket
-// drops (coex stall / peer reboot / keepalive/NAT timeout), the zboss adapter
-// otherwise keeps running against a dead port and every command fails with
-// "Connection not initialized" while z2m never notices. Chain after this fix:
-// uart unexpected close -> emit "close" -> driver re-emit "close" ->
-// adapter onDriverClose() (logs "Driver connection closed unexpectedly") ->
-// emit "disconnected" -> herdsman Controller emits adapterDisconnected ->
-// z2m Controller logs "Adapter disconnected, stopping" and stop(false, 2)
-// (process exit 2) so the container restart policy recovers it, instead of a
-// silent host-side wedge that needs a manual z2m restart.
-// ---------------------------------------------------------------------------
-applyPatch("adapter/zboss/uart.js", [
-    [
-`        if (this.inReset) {
-            await (0, utils_1.wait)(3000);
-            await this.openPort();
-            this.inReset = false;
-        }`,
-`        if (this.inReset) {
-            await (0, utils_1.wait)(3000);
-            await this.openPort();
-            this.inReset = false;
-        }
-        else if (!this.closing) {
-            // Unexpected close (USB unplug, TCP peer reboot/keepalive drop, ...).
-            // Notify upper layers so the application can handle the disconnect.
-            // Without this the adapter keeps running against a dead port and
-            // every subsequent command fails with "Connection not initialized".
-            this.emit("close");
-        }`,
-    ],
-]);
-applyPatch("adapter/zboss/driver.js", [
-    [
-`        this.port.on("frame", this.onFrame.bind(this));`,
-`        this.port.on("frame", this.onFrame.bind(this));
-        this.port.on("close", () => this.emit("close"));`,
-    ],
-]);
-applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
-    [
-`        this.driver.on("frame", this.processMessage.bind(this));
-    }
-    async processMessage(frame) {`,
-`        this.driver.on("frame", this.processMessage.bind(this));
-        this.driver.on("close", this.onDriverClose.bind(this));
-    }
-    onDriverClose() {
-        logger_1.logger.error("Driver connection closed unexpectedly", NS);
-        this.emit("disconnected");
-    }
-    async processMessage(frame) {`,
-    ],
-]);
+// wifi-coex TCP recovery (emit "disconnected" on unexpected port close) —
+// formerly backported here as Koenkk/zigbee-herdsman#1779 — is UPSTREAM as of
+// zigbee-herdsman 10.4.1 (merge c3c3361). The three applyPatch entries
+// (uart.js onPortClose else-branch, driver.js close-forward, zbossAdapter.js
+// onDriverClose -> emit "disconnected") were removed when the fork re-pinned
+// 10.4.0 -> 10.4.1; they would no-op against the now-identical upstream code.
+// Same lifecycle as the #1763 inReset-drop noted further up.
 
 console.log("[ZBOSS Patch] Done.");
