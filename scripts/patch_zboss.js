@@ -140,6 +140,19 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
 // ---------------------------------------------------------------------------
 applyPatch("adapter/zboss/uart.js", [
     ["waitFor(sequence, timeout = 2000)", "waitFor(sequence, timeout = 30000)"],
+    // Reconnect fix (2026-07-24, bench-proven): closePort() destroys the socket
+    // but never unpipes the persistent this.writer from it. Node does NOT
+    // auto-unpipe on socket.destroy(), so on a reconnect (the fork's
+    // restore->reboot->stop()->connect() flow, or any coordinator reboot over a
+    // surviving TCP link) the writer ends up piped to BOTH the dead old socket
+    // and the new one; the dead socket's backpressure wedges the Readable and
+    // the 2nd+ frame after reconnect never reaches the wire -> 30 s timeout ->
+    // "Failed to start zigbee-herdsman". Unpipe the writer at the top of
+    // closePort() so only the live port is ever a pipe target.
+    [
+        "    async closePort() {\n        if (this.serialPort?.isOpen) {",
+        "    async closePort() {\n        this.writer.unpipe();\n        if (this.serialPort?.isOpen) {",
+    ],
 ]);
 applyPatch("adapter/zboss/driver.js", [
     ["execCommand(commandId, params = {}, timeout = 10000)", "execCommand(commandId, params = {}, timeout = 30000)"],
