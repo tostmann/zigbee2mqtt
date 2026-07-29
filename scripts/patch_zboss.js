@@ -207,4 +207,73 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
 // 10.4.0 -> 10.4.1; they would no-op against the now-identical upstream code.
 // Same lifecycle as the #1763 inReset-drop noted further up.
 
+// ---------------------------------------------------------------------------
+// Restore gate + truthful backup header (2026-07-30).
+//
+// (1) Backup header fix: backup() sourced panId/extendedPanId/channel from
+//     driver.netInfo — herdsman's CACHED network parameters. A backup written
+//     in the same run that FORMED the network therefore carried the
+//     PRE-formation pan/channel in its unified-format header while raw_nvram
+//     held the real post-formation network (observed live: header pan 0x1234
+//     vs actual 0xa6a5). The structured backup is read live from the chip —
+//     let its pan/extpan/channel override the header. TLV byte order for the
+//     extended PAN is ZBOSS-native (backup_structured.h TAG_EXT_PAN_ID), the
+//     same order the netInfo path used.
+//
+// (2) Restore gate: start() used to restore raw_nvram whenever
+//     needsToBeInitialised() said the live network differs from
+//     configuration.yaml — WITHOUT checking that the backup matches the
+//     configuration either. A non-matching backup then loops forever
+//     (restore -> reboot -> still != config -> restore ...) and, since the
+//     reader fix made commissioning work, would eventually be destroyed by a
+//     factory reset. Mirror stock herdsman behaviour: refuse loudly, tell the
+//     user the two resolutions. The throw must escape the surrounding
+//     try/catch (which downgrades restore errors to a log line), hence the
+//     isConfigMismatch marker and the rethrow in the catch.
+// ---------------------------------------------------------------------------
+applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
+    [
+        `                    if (_structured.coordinator_ieee) backup.coordinatorIeeeAddress = _structured.coordinator_ieee;
+                }`,
+        `                    if (_structured.coordinator_ieee) backup.coordinatorIeeeAddress = _structured.coordinator_ieee;
+                    if (_structured.pan_id != null) backup.networkOptions.panId = _structured.pan_id;
+                    if (_structured.extended_pan_id) backup.networkOptions.extendedPanId = Buffer.from(_structured.extended_pan_id);
+                    if (_structured.channel != null) { backup.logicalChannel = _structured.channel; backup.networkOptions.channelList = [_structured.channel]; }
+                }`,
+    ],
+    [
+        `                        if (await this.driver.needsToBeInitialised(this.networkOptions)) {
+                            logger_1.logger.info("Restoring ZBOSS NVRAM from backup...", NS);`,
+        `                        if (await this.driver.needsToBeInitialised(this.networkOptions)) {
+                            const cfg = this.networkOptions;
+                            const cfgKey = Buffer.from(cfg.networkKey || []).toString("hex").toLowerCase();
+                            const cfgExt = Buffer.from(cfg.extendedPanID || []).toString("hex").toLowerCase();
+                            const bkPan = Number.parseInt(backupJson.pan_id, 16);
+                            const bkExt = String(backupJson.extended_pan_id || "").toLowerCase();
+                            const bkKey = String((backupJson.network_key || {}).key || "").toLowerCase();
+                            const bkCh = backupJson.channel;
+                            if (!(bkPan === cfg.panID && bkExt === cfgExt && bkKey === cfgKey && cfg.channelList.includes(bkCh))) {
+                                const err = new Error("ZBOSS: coordinator_backup.json does not match configuration.yaml " +
+                                    \`(backup pan=0x\${bkPan.toString(16)} ch=\${bkCh} extPan=\${bkExt} key=\${bkKey.slice(0, 4)}... vs \` +
+                                    \`config pan=0x\${cfg.panID.toString(16)} ch=[\${cfg.channelList}] extPan=\${cfgExt} key=\${cfgKey.slice(0, 4)}...). \` +
+                                    "Refusing to restore a non-matching backup - that loops forever and can destroy a live network. " +
+                                    "Either fix configuration.yaml to match the backup, or delete/move coordinator_backup.json to commission per configuration.");
+                                err.isConfigMismatch = true;
+                                throw err;
+                            }
+                            logger_1.logger.info("Restoring ZBOSS NVRAM from backup...", NS);`,
+    ],
+    [
+        `        } catch (e) {
+            logger_1.logger.error(\`Failed to restore ZBOSS backup: \${e.message}\`, NS);
+        }`,
+        `        } catch (e) {
+            if (e.isConfigMismatch) {
+                throw e;
+            }
+            logger_1.logger.error(\`Failed to restore ZBOSS backup: \${e.message}\`, NS);
+        }`,
+    ],
+]);
+
 console.log("[ZBOSS Patch] Done.");
