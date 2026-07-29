@@ -153,9 +153,37 @@ applyPatch("adapter/zboss/uart.js", [
         "    async closePort() {\n        if (this.serialPort?.isOpen) {",
         "    async closePort() {\n        this.writer.unpipe();\n        if (this.serialPort?.isOpen) {",
     ],
+    // Reader-death on remote FIN (2026-07-30, bench-proven root cause of the
+    // "factory reset over TCP times out" class): when the TCP peer closes the
+    // connection (CDC2NET bridge drops clients on the radio's ROM banner, coex
+    // NCP reboots), the socket emits 'end' and pipe()'s default end:true then
+    // calls this.reader.end() — the Transform is FINISHED for good. The
+    // inReset branch of onPortClose reopens in place (wait 3 s + openPort) and
+    // pipes the new socket into that dead reader: every write is a silent
+    // ERR_STREAM_WRITE_AFTER_END, so the post-reboot boot-ready frame never
+    // reaches onPackage and execCommand(NCP_RESET) times out. Timing was
+    // measured NOT to be the issue (boot frame arrives ~1.6 s after reset,
+    // replayed by the bridge on reconnect at ~4.5 s — well inside any timeout).
+    // driver.stop()+connect() (the restore flow) never hit this because
+    // destroy() emits no 'end'. Fix: never let the source end() the reader.
+    [
+        "this.serialPort.pipe(this.reader);",
+        "this.serialPort.pipe(this.reader, { end: false });",
+    ],
+    [
+        "this.socketPort.pipe(this.reader);",
+        "this.socketPort.pipe(this.reader, { end: false });",
+    ],
 ]);
 applyPatch("adapter/zboss/driver.js", [
     ["execCommand(commandId, params = {}, timeout = 10000)", "execCommand(commandId, params = {}, timeout = 30000)"],
+    // Upstream's reset() passes an EXPLICIT 10000 that bypasses the raised
+    // default above — the one command that spans an erase-boot + port-reopen
+    // cycle was the only one still on 10 s. Measured on the H2 gateway board
+    // the boot frame arrives at ~4.5 s (so 10 s would suffice there), but on
+    // the coex/C1 link round-trips spike to several seconds and the C6
+    // erase-boot alone was measured at 7.3 s — restore the 30 s policy here too.
+    ["execCommand(enums_1.CommandId.NCP_RESET, { options }, 10000)", "execCommand(enums_1.CommandId.NCP_RESET, { options }, 30000)"],
 ]);
 
 // wifi-coex backup fallback: the raw 40 KB NVRAM pull (320 chunks even at the
