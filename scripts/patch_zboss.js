@@ -276,4 +276,30 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
     ],
 ]);
 
+// permitJoin() silent no-op (2026-07-30): the whole method body sits inside
+// `if (this.driver.isInitialized())` with NO else — called while the driver is
+// not initialised (start/stop races), the request simply evaporates: no log,
+// no error, z2m still reports the permit as ok. During the 29.07 bench
+// campaign this exact shape cost hours ("network won't open under z2m").
+// Make the branch loud. Deliberately log-only, no throw: the guard also
+// covers internal timer-driven calls around shutdown, where a throw would
+// surface as an unhandled rejection.
+applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
+    [
+        `                    await this.sendZdo(ZSpec.BLANK_EUI64, ZSpec.BroadcastAddress.DEFAULT, clusterId, zdoPayload, true);
+                }
+            }
+        }
+    }`,
+        `                    await this.sendZdo(ZSpec.BLANK_EUI64, ZSpec.BroadcastAddress.DEFAULT, clusterId, zdoPayload, true);
+                }
+            }
+        }
+        else {
+            logger_1.logger.error(\`permitJoin(\${seconds}) IGNORED - ZBOSS driver not initialized (adapter starting or stopped); the network was NOT opened/closed\`, NS);
+        }
+    }`,
+    ],
+]);
+
 console.log("[ZBOSS Patch] Done.");
