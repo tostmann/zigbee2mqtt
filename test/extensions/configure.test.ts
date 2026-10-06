@@ -6,7 +6,7 @@ import {events as mockMQTTEvents, mockMQTTPublishAsync} from "../mocks/mqtt";
 import {flushPromises} from "../mocks/utils";
 import {devices, type Endpoint, events as mockZHEvents, type Device as ZhDevice} from "../mocks/zigbeeHerdsman";
 
-import stringify from "json-stable-stringify-without-jsonify";
+import {stringify} from "../../lib/util/stringify";
 import {InterviewState} from "zigbee-herdsman/dist/controller/model/device";
 import {Controller} from "../../lib/controller";
 import Device from "../../lib/model/device";
@@ -193,16 +193,28 @@ describe("Extension: Configure", () => {
     });
 
     it("Should allow to configure via MQTT", async () => {
+        const emitDevicesChanged = vi.spyOn(controller.eventBus, "emitDevicesChanged");
+        const emitExposesChanged = vi.spyOn(controller.eventBus, "emitExposesChanged");
+
         mockClear(devices.remote);
         expectRemoteNotConfigured();
-        await mockMQTTEvents.message("zigbee2mqtt/bridge/request/device/configure", "remote");
-        await flushPromises();
-        expectRemoteConfigured();
-        expect(mockMQTTPublishAsync).toHaveBeenCalledWith(
-            "zigbee2mqtt/bridge/response/device/configure",
-            stringify({data: {id: "remote"}, status: "ok"}),
-            {},
-        );
+        try {
+            await mockMQTTEvents.message("zigbee2mqtt/bridge/request/device/configure", "remote");
+            await flushPromises();
+            expectRemoteConfigured();
+            expect(emitDevicesChanged).toHaveBeenCalledTimes(1);
+            expect(emitExposesChanged).toHaveBeenCalledWith({
+                device: controller.zigbee.resolveEntity(devices.remote),
+            });
+            expect(mockMQTTPublishAsync).toHaveBeenCalledWith(
+                "zigbee2mqtt/bridge/response/device/configure",
+                stringify({data: {id: "remote"}, status: "ok"}),
+                {},
+            );
+        } finally {
+            emitExposesChanged.mockRestore();
+            emitDevicesChanged.mockRestore();
+        }
     });
 
     it("Fail to configure via MQTT when device does not exist", async () => {

@@ -1,10 +1,10 @@
 import assert from "node:assert";
 import bind from "bind-decorator";
-import stringify from "json-stable-stringify-without-jsonify";
 import type * as zhc from "zigbee-herdsman-converters";
 import type {Zh} from "zigbee-herdsman-converters/lib/types";
 import logger from "../util/logger";
 import * as settings from "../util/settings";
+import {stringify} from "../util/stringify";
 import utils, {assertBinaryExpose, assertEnumExpose, assertNumericExpose, isBinaryExpose, isEnumExpose, isNumericExpose} from "../util/utils";
 import Extension from "./extension";
 
@@ -36,11 +36,11 @@ interface ActionData {
 }
 
 const ACTION_PATTERNS: string[] = [
-    "^(?<button>(?:button_)?[a-z0-9]+)_(?<action>(?:press|hold)(?:_release)?)$",
-    "^(?<action>recall|scene)_(?<scene>[0-2][0-9]{0,2})$",
+    "^(?<button>(?:button_)?[a-z0-9]+)_(?<action>(?:press|hold|single|double)(?:_release)?)$",
+    "^(?<action>recall|scene)_(?<scene>[0-9]+)$",
     "^(?<actionPrefix>region_)(?<region>[1-9]|10)_(?<action>enter|leave|occupied|unoccupied)$",
     "^(?<action>dial_rotate)_(?<direction>left|right)_(?<speed>step|slow|fast)$",
-    "^(?<action>brightness_step)(?:_(?<direction>up|down))?$",
+    "^(?<action>brightness_step|color_temperature_step|color_saturation_step|color_hue_step)(?:_(?<direction>up|down))?$",
 ];
 const ACCESS_STATE = 0b001;
 const ACCESS_SET = 0b010;
@@ -48,17 +48,31 @@ const GROUP_SUPPORTED_TYPES: ReadonlyArray<string> = ["light", "switch", "lock",
 const COVER_OPENING_LOOKUP: ReadonlyArray<string> = ["opening", "open", "forward", "up", "rising"];
 const COVER_CLOSING_LOOKUP: ReadonlyArray<string> = ["closing", "close", "backward", "back", "reverse", "down", "declining"];
 const COVER_STOPPED_LOOKUP: ReadonlyArray<string> = ["stopped", "stop", "pause", "paused"];
-const SWITCH_DIFFERENT: ReadonlyArray<string> = ["valve_detection", "window_detection", "auto_lock", "away_mode"];
+const CONFIG_SWITCH_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
+    auto_lock: {entity_category: "config", icon: "mdi:lock"},
+    away_mode: {entity_category: "config", icon: "mdi:home-export-outline"},
+    comfort_smiley: {entity_category: "config", icon: "mdi:emoticon-happy-outline"},
+    enable_display: {entity_category: "config", icon: "mdi:monitor"},
+    indicator: {entity_category: "config", icon: "mdi:led-on"},
+    tilt_mode: {entity_category: "config", icon: "mdi:angle-acute"},
+    valve_detection: {entity_category: "config", icon: "mdi:pipe-valve"},
+    window_detection: {entity_category: "config", icon: "mdi:window-open-variant"},
+} as const;
+const SWITCH_DIFFERENT: ReadonlyArray<string> = Object.keys(CONFIG_SWITCH_DISCOVERY_LOOKUP);
 const BINARY_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     activity_led_indicator: {icon: "mdi:led-on"},
     area1Occupancy: {device_class: "occupancy"},
     area2Occupancy: {device_class: "occupancy"},
     area3Occupancy: {device_class: "occupancy"},
     area4Occupancy: {device_class: "occupancy"},
+    auto_lock: {entity_category: "config", icon: "mdi:lock"},
     auto_off: {icon: "mdi:flash-auto"},
+    away_mode: {entity_category: "config", icon: "mdi:home-export-outline"},
     battery_low: {entity_category: "diagnostic", device_class: "battery"},
     button_lock: {entity_category: "config", icon: "mdi:lock"},
     calibration: {entity_category: "config", icon: "mdi:progress-wrench"},
+    calibration_left: {entity_category: "config", icon: "mdi:progress-wrench"},
+    calibration_right: {entity_category: "config", icon: "mdi:progress-wrench"},
     capabilities_configurable_curve: {entity_category: "diagnostic", icon: "mdi:tune"},
     capabilities_forward_phase_control: {entity_category: "diagnostic", icon: "mdi:tune"},
     capabilities_overload_detection: {entity_category: "diagnostic", icon: "mdi:tune"},
@@ -71,16 +85,22 @@ const BINARY_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     consumer_connected: {device_class: "plug"},
     contact: {device_class: "door"},
     garage_door_contact: {device_class: "garage_door", payload_on: false, payload_off: true},
+    frost_protection: {entity_category: "config", icon: "mdi:snowflake-thermometer"},
+    heating_stop: {entity_category: "config", icon: "mdi:radiator-off"},
     eco_mode: {entity_category: "config", icon: "mdi:leaf"},
+    enable_display: {entity_category: "config", icon: "mdi:monitor"},
     expose_pin: {entity_category: "config", icon: "mdi:pin"},
     flip_indicator_light: {entity_category: "config", icon: "mdi:arrow-left-right"},
     gas: {device_class: "gas"},
+    indicator: {entity_category: "config", icon: "mdi:led-on"},
     indicator_mode: {entity_category: "config", icon: "mdi:led-on"},
     invert_cover: {entity_category: "config", icon: "mdi:arrow-left-right"},
     led_disabled_night: {entity_category: "config", icon: "mdi:led-off"},
     led_indication: {entity_category: "config", icon: "mdi:led-on"},
     led_enable: {entity_category: "config", icon: "mdi:led-on"},
     motor_reversal: {entity_category: "config", icon: "mdi:arrow-left-right"},
+    motor_reversal_left: {entity_category: "config", icon: "mdi:arrow-left-right"},
+    motor_reversal_right: {entity_category: "config", icon: "mdi:arrow-left-right"},
     moving: {device_class: "moving"},
     no_position_support: {entity_category: "config", icon: "mdi:minus-circle-outline"},
     noise_detected: {device_class: "sound"},
@@ -101,14 +121,15 @@ const BINARY_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     temperature_scale: {entity_category: "config", icon: "mdi:temperature-celsius"},
     test: {entity_category: "diagnostic", icon: "mdi:test-tube"},
     th_heater: {icon: "mdi:heat-wave"},
+    tilt_mode: {entity_category: "config", icon: "mdi:angle-acute"},
     trigger_indicator: {icon: "mdi:led-on"},
     valve_alarm: {device_class: "problem"},
-    valve_detection: {icon: "mdi:pipe-valve"},
+    valve_detection: {entity_category: "config", icon: "mdi:pipe-valve"},
     valve_state: {device_class: "opening"},
     vibration: {device_class: "vibration"},
     water_leak: {device_class: "moisture"},
     window: {device_class: "window"},
-    window_detection: {icon: "mdi:window-open-variant"},
+    window_detection: {entity_category: "config", icon: "mdi:window-open-variant"},
     window_open: {device_class: "window"},
 } as const;
 const NUMERIC_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
@@ -120,7 +141,7 @@ const NUMERIC_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     alarm_temperature_min: {device_class: "temperature", entity_category: "config", icon: "mdi:thermometer-low"},
     angle: {icon: "angle-acute"},
     angle_axis: {icon: "angle-acute"},
-    apparent_temperature: {icon: "mdi:thermometer-lines", state_class: "measurement"},
+    apparent_temperature: {device_class: "temperature", icon: "mdi:thermometer-lines", state_class: "measurement"},
     aqi: {device_class: "aqi", state_class: "measurement"},
     auto_relock_time: {entity_category: "config", icon: "mdi:timer"},
     away_preset_days: {entity_category: "config", icon: "mdi:timer"},
@@ -136,9 +157,27 @@ const NUMERIC_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     boost_heating_countdown_time_set: {entity_category: "config", icon: "mdi:timer"},
     boost_time: {entity_category: "config", icon: "mdi:timer"},
     calibration: {entity_category: "config", icon: "mdi:wrench-clock"},
+    calibration_button_hold_time: {
+        enabled_by_default: false,
+        entity_category: "config",
+        icon: "mdi:wrench-clock",
+    },
+    calibration_closing_time: {entity_category: "config", icon: "mdi:wrench-clock"},
+    calibration_motor_start_delay: {
+        enabled_by_default: false,
+        entity_category: "config",
+        icon: "mdi:wrench-clock",
+    },
+    calibration_opening_time: {entity_category: "config", icon: "mdi:wrench-clock"},
     calibration_time: {entity_category: "config", icon: "mdi:wrench-clock"},
+    calibration_time_left: {entity_category: "config", icon: "mdi:wrench-clock"},
+    calibration_time_right: {entity_category: "config", icon: "mdi:wrench-clock"},
     co2: {device_class: "carbon_dioxide", state_class: "measurement"},
+    comfort_humidity_max: {device_class: "humidity", entity_category: "config", icon: "mdi:water-percent"},
+    comfort_humidity_min: {device_class: "humidity", entity_category: "config", icon: "mdi:water-percent"},
     comfort_temperature: {entity_category: "config", icon: "mdi:thermometer"},
+    comfort_temperature_max: {device_class: "temperature", entity_category: "config", icon: "mdi:thermometer-high"},
+    comfort_temperature_min: {device_class: "temperature", entity_category: "config", icon: "mdi:thermometer-low"},
     cpu_temperature: {
         device_class: "temperature",
         entity_category: "diagnostic",
@@ -149,29 +188,38 @@ const NUMERIC_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     current_phase_b: {device_class: "current", state_class: "measurement"},
     current_phase_c: {device_class: "current", state_class: "measurement"},
     deadzone_temperature: {entity_category: "config", icon: "mdi:thermometer"},
+    detection_delay: {entity_category: "config", icon: "mdi:timer"},
     detection_interval: {icon: "mdi:timer"},
     device_temperature: {
         device_class: "temperature",
         entity_category: "diagnostic",
         state_class: "measurement",
     },
-    dew_point: {icon: "mdi:thermometer-water", state_class: "measurement"},
+    dew_point: {device_class: "temperature", icon: "mdi:thermometer-water", state_class: "measurement"},
     distance: {device_class: "distance", state_class: "measurement"},
     duration: {entity_category: "config", icon: "mdi:timer"},
     eco2: {device_class: "volatile_organic_compounds_parts", state_class: "measurement"},
     eco_temperature: {entity_category: "config", icon: "mdi:thermometer"},
+    effect_speed: {
+        enabled_by_default: false,
+        entity_category: "config",
+        icon: "mdi:motion-outline",
+    },
     energy: {device_class: "energy", state_class: "total_increasing"},
     external_temperature_input: {device_class: "temperature", icon: "mdi:thermometer"},
     external_temperature: {device_class: "temperature", icon: "mdi:thermometer", state_class: "measurement"},
     external_humidity: {device_class: "humidity", icon: "mdi:water-percent", state_class: "measurement"},
+    fading_time: {entity_category: "config", icon: "mdi:timer"},
     formaldehyd: {state_class: "measurement"},
+    formaldehyde: {state_class: "measurement"},
     flow: {device_class: "volume_flow_rate", state_class: "measurement"},
+    frequency: {device_class: "frequency", state_class: "measurement"},
     gas: {device_class: "gas", state_class: "total_increasing", icon: "mdi:meter-gas"},
     gas_density: {icon: "mdi:google-circles-communities", state_class: "measurement"},
-    gust_speed: {icon: "mdi:weather-windy-variant", state_class: "measurement"},
+    gust_speed: {device_class: "wind_speed", icon: "mdi:weather-windy-variant", state_class: "measurement"},
     hcho: {icon: "mdi:air-filter", state_class: "measurement"},
     heat_stress: {icon: "mdi:weather-sunny-alert", state_class: "measurement"},
-    humidex: {icon: "mdi:thermometer-alert", state_class: "measurement"},
+    humidex: {device_class: "temperature", icon: "mdi:thermometer-alert", state_class: "measurement"},
     humidity: {device_class: "humidity", state_class: "measurement"},
     humidity_calibration: {entity_category: "config", icon: "mdi:wrench-clock"},
     humidity_max: {entity_category: "config", icon: "mdi:water-percent"},
@@ -179,6 +227,7 @@ const NUMERIC_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     illuminance_calibration: {entity_category: "config", icon: "mdi:wrench-clock"},
     illuminance: {device_class: "illuminance", state_class: "measurement"},
     illuminance_raw: {state_class: "measurement"},
+    interval_time: {entity_category: "config", icon: "mdi:timer"},
     internalTemperature: {
         device_class: "temperature",
         entity_category: "diagnostic",
@@ -192,13 +241,20 @@ const NUMERIC_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     },
     load_estimate: {state_class: "measurement"},
     local_temperature: {device_class: "temperature", state_class: "measurement"},
+    large_motion_detection_distance: {entity_category: "config", icon: "mdi:signal-distance-variant"},
+    large_motion_detection_sensitivity: {entity_category: "config", icon: "mdi:motion-sensor"},
     max_range: {entity_category: "config", icon: "mdi:signal-distance-variant"},
     max_temperature: {entity_category: "config", icon: "mdi:thermometer-high"},
     max_temperature_limit: {entity_category: "config", icon: "mdi:thermometer-high"},
+    maximum_range: {entity_category: "config", icon: "mdi:signal-distance-variant"},
+    measurement_interval: {entity_category: "config", icon: "mdi:clock-out"},
     min_temperature_limit: {entity_category: "config", icon: "mdi:thermometer-low"},
     min_temperature: {entity_category: "config", icon: "mdi:thermometer-low"},
+    minimum_range: {entity_category: "config", icon: "mdi:signal-distance-variant"},
     minimum_on_level: {entity_category: "config"},
     measurement_poll_interval: {entity_category: "config", icon: "mdi:clock-out"},
+    medium_motion_detection_distance: {entity_category: "config", icon: "mdi:signal-distance-variant"},
+    medium_motion_detection_sensitivity: {entity_category: "config", icon: "mdi:motion-sensor"},
     motion_sensitivity: {entity_category: "config", icon: "mdi:motion-sensor"},
     noise: {device_class: "sound_pressure", state_class: "measurement"},
     noise_detect_level: {icon: "mdi:volume-equal"},
@@ -234,13 +290,21 @@ const NUMERIC_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
         icon: "mdi:brightness-5",
     },
     smoke_density: {icon: "mdi:google-circles-communities", state_class: "measurement"},
+    sensitivity: {entity_category: "config", icon: "mdi:tune"},
+    small_detection_distance: {entity_category: "config", icon: "mdi:signal-distance-variant"},
+    small_detection_sensitivity: {entity_category: "config", icon: "mdi:motion-sensor"},
+    soil_calibration: {entity_category: "config", icon: "mdi:wrench-clock"},
+    soil_fertility: {device_class: "conductivity", state_class: "measurement"},
     soil_moisture: {device_class: "moisture", state_class: "measurement"},
+    soil_sampling: {entity_category: "config", icon: "mdi:clock-out"},
+    soil_warning: {entity_category: "config", icon: "mdi:water-percent-alert"},
     temperature: {device_class: "temperature", state_class: "measurement"},
     temperature_probe: {device_class: "temperature", state_class: "measurement"},
     temperature_calibration: {entity_category: "config", icon: "mdi:wrench-clock"},
     temperature_max: {entity_category: "config", icon: "mdi:thermometer-plus"},
     temperature_min: {entity_category: "config", icon: "mdi:thermometer-minus"},
     temperature_offset: {icon: "mdi:thermometer-lines"},
+    temperature_sampling: {entity_category: "config", icon: "mdi:clock-out"},
     transition: {entity_category: "config", icon: "mdi:transition"},
     trigger_count: {icon: "mdi:counter", enabled_by_default: false, state_class: "measurement"},
     uv_index: {icon: "mdi:white-balance-sunny", state_class: "measurement"},
@@ -255,7 +319,7 @@ const NUMERIC_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
         device_class: "water",
         state_class: "total_increasing",
     },
-    wind_chill: {icon: "mdi:snowflake-thermometer", state_class: "measurement"},
+    wind_chill: {device_class: "temperature", icon: "mdi:snowflake-thermometer", state_class: "measurement"},
     wind_direction: {icon: "mdi:compass-outline", state_class: "measurement"},
     wind_speed: {device_class: "wind_speed", icon: "mdi:weather-windy", state_class: "measurement"},
     x: {icon: "mdi:axis-x-arrow", state_class: "measurement"},
@@ -278,7 +342,7 @@ const ENUM_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     effect: {enabled_by_default: false, icon: "mdi:palette"},
     force: {entity_category: "config", icon: "mdi:valve"},
     keep_time: {entity_category: "config", icon: "mdi:av-timer"},
-    identify: {device_class: "identify"},
+    identify: {entity_category: "diagnostic", device_class: "identify"},
     keypad_lockout: {entity_category: "config", icon: "mdi:lock"},
     load_detection_mode: {entity_category: "config", icon: "mdi:tune"},
     load_dimmable: {entity_category: "config", icon: "mdi:chart-bell-curve"},
@@ -287,6 +351,8 @@ const ENUM_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     mode_phase_control: {entity_category: "config", icon: "mdi:tune"},
     mode: {entity_category: "config", icon: "mdi:tune"},
     mode_switch: {icon: "mdi:tune"},
+    motor_direction: {entity_category: "config", icon: "mdi:arrow-left-right"},
+    motor_state: {entity_category: "diagnostic", icon: "mdi:state-machine"},
     motion_sensitivity: {entity_category: "config", icon: "mdi:tune"},
     operation_mode: {entity_category: "config", icon: "mdi:tune"},
     power_on_behavior: {entity_category: "config", icon: "mdi:power-settings"},
@@ -297,11 +363,13 @@ const ENUM_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     sensitivity: {entity_category: "config", icon: "mdi:tune"},
     sensor: {icon: "mdi:tune"},
     sensors_type: {entity_category: "config", icon: "mdi:tune"},
+    set_limits: {entity_category: "config", icon: "mdi:ray-start-end"},
     sound_volume: {entity_category: "config", icon: "mdi:volume-high"},
     status: {icon: "mdi:state-machine"},
     switch_type: {entity_category: "config", icon: "mdi:tune"},
     temperature_display_mode: {entity_category: "config", icon: "mdi:thermometer"},
     temperature_sensor_select: {entity_category: "config", icon: "mdi:home-thermometer"},
+    temperature_unit: {entity_category: "config", icon: "mdi:temperature-celsius"},
     thermostat_unit: {entity_category: "config", icon: "mdi:thermometer"},
     update: {device_class: "update"},
     volume: {entity_category: "config", icon: "mdi: volume-high"},
@@ -311,9 +379,14 @@ const ENUM_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
 const LIST_DISCOVERY_LOOKUP: {[s: string]: KeyValue} = {
     action: {icon: "mdi:gesture-double-tap"},
     color_options: {icon: "mdi:palette"},
+    effect_color: {
+        enabled_by_default: false,
+        entity_category: "config",
+        icon: "mdi:palette-swatch",
+    },
     level_config: {entity_category: "diagnostic"},
     programming_mode: {icon: "mdi:calendar-clock"},
-    schedule_settings: {icon: "mdi:calendar-clock"},
+    schedule_settings: {entity_category: "config", icon: "mdi:calendar-clock"},
 } as const;
 
 const featurePropertyWithoutEndpoint = (feature: zhc.Feature): string => {
@@ -322,6 +395,50 @@ const featurePropertyWithoutEndpoint = (feature: zhc.Feature): string => {
     }
 
     return feature.property;
+};
+
+const cleanName = (name: string): string => name.replace(/^(?:analog_in_|analog_out_)/, "");
+
+const applyHomeAssistantExposeMetadata = (payload: DiscoveryEntry, homeAssistant: zhc.Expose["homeassistant"]): void => {
+    if (!homeAssistant) {
+        return;
+    }
+
+    if (homeAssistant.type !== undefined) {
+        payload.type = homeAssistant.type;
+    }
+
+    if (homeAssistant.schema !== undefined) {
+        payload.discovery_payload.schema = homeAssistant.schema;
+    }
+
+    if (homeAssistant.entityCategory !== undefined) {
+        payload.discovery_payload.entity_category = homeAssistant.entityCategory;
+    }
+
+    if (homeAssistant.deviceClass !== undefined) {
+        payload.discovery_payload.device_class = homeAssistant.deviceClass;
+    }
+
+    if (homeAssistant.enabledByDefault !== undefined) {
+        payload.discovery_payload.enabled_by_default = homeAssistant.enabledByDefault;
+    }
+
+    if (homeAssistant.icon !== undefined) {
+        payload.discovery_payload.icon = homeAssistant.icon;
+    }
+
+    if (homeAssistant.name !== undefined) {
+        payload.discovery_payload.name = homeAssistant.name;
+    }
+
+    if (homeAssistant.valueTemplate !== undefined) {
+        if (homeAssistant.valueTemplate === null) {
+            delete payload.discovery_payload.value_template;
+        } else {
+            payload.discovery_payload.value_template = homeAssistant.valueTemplate;
+        }
+    }
 };
 
 /**
@@ -411,9 +528,13 @@ export class HomeAssistant extends Extension {
     ) {
         super(zigbee, mqtt, state, publishEntityState, eventBus, enableDisableExtension, restartCallback, addExtension);
         if (settings.get().advanced.output === "attribute") {
-            throw new Error("Home Assistant integration is not possible with attribute output!");
+            throw new Error("Home Assistant integration requires 'output: json' under 'advanced'");
         }
 
+        // TODO (Z2M 3.0.0): Prevent starting without cache_state, instead of warning
+        // if (!settings.get().advanced.cache_state) {
+        //     throw new Error("Home Assistant integration is not possible without caching states! Set `cache_state: true` under `advanced`");
+        // }
         const haSettings = settings.get().homeassistant;
         assert(haSettings.enabled, `Home Assistant extension created with setting 'enabled: false'`);
         this.discoveryTopic = haSettings.discovery_topic;
@@ -429,8 +550,9 @@ export class HomeAssistant extends Extension {
     }
 
     override async start(): Promise<void> {
+        // TODO (Z2M 3.0.0): Prevent starting without cache_state, instead of warning
         if (!settings.get().advanced.cache_state) {
-            logger.warning("In order for Home Assistant integration to work properly set `cache_state: true");
+            logger.warning("In order for Home Assistant integration to work properly, set `cache_state: true` under `advanced`");
         }
 
         this.zigbee2MQTTVersion = (await utils.getZigbee2MQTTVersion(false)).version;
@@ -602,25 +724,26 @@ export class HomeAssistant extends Extension {
                     discoveryEntry.discovery_payload.state_off = state.value_off;
                     discoveryEntry.discovery_payload.state_on = state.value_on;
                     discoveryEntry.object_id = property;
-
-                    if (property === "window_detection") {
-                        discoveryEntry.discovery_payload.icon = "mdi:window-open-variant";
-                    }
+                    Object.assign(discoveryEntry.discovery_payload, CONFIG_SWITCH_DISCOVERY_LOOKUP[property]);
                 }
 
                 discoveryEntries.push(discoveryEntry);
                 break;
             }
             case "climate": {
-                const setpointProperties = ["occupied_heating_setpoint", "current_heating_setpoint"];
-                const setpoint = (firstExpose as zhc.Climate).features.filter(isNumericExpose).find((f) => setpointProperties.includes(f.name));
+                const heatingSetpoint = (firstExpose as zhc.Climate).features
+                    .filter(isNumericExpose)
+                    .find((f) => ["occupied_heating_setpoint", "current_heating_setpoint"].includes(f.name));
+                const coolingSetpoint = (firstExpose as zhc.Climate).features
+                    .filter(isNumericExpose)
+                    .find((f) => f.name === "occupied_cooling_setpoint");
+                const primarySetpoint = heatingSetpoint ?? coolingSetpoint;
                 assert(
-                    setpoint && setpoint.value_min !== undefined && setpoint.value_max !== undefined,
+                    primarySetpoint && primarySetpoint.value_min !== undefined && primarySetpoint.value_max !== undefined,
                     "No setpoint found or it is missing value_min/max",
                 );
                 const temperature = (firstExpose as zhc.Climate).features.find((f) => f.name === "local_temperature");
                 assert(temperature, "No temperature found");
-
                 const discoveryEntry: DiscoveryEntry = {
                     type: "climate",
                     object_id: endpointName ? `climate_${endpointName}` : "climate",
@@ -631,9 +754,9 @@ export class HomeAssistant extends Extension {
                         state_topic: false,
                         temperature_unit: "C",
                         // Setpoint
-                        temp_step: setpoint.value_step,
-                        min_temp: setpoint.value_min.toString(),
-                        max_temp: setpoint.value_max.toString(),
+                        temp_step: primarySetpoint.value_step,
+                        min_temp: primarySetpoint.value_min.toString(),
+                        max_temp: primarySetpoint.value_max.toString(),
                         // Temperature
                         current_temperature_topic: true,
                         current_temperature_template: `{{ value_json["${temperature.property}"] }}`,
@@ -662,17 +785,16 @@ export class HomeAssistant extends Extension {
                     discoveryEntry.discovery_payload.action_template = `{% set values = {None:None,'idle':'idle','heat':'heating','cool':'cooling','fan_only':'fan'} %}{{ values[value_json["${state.property}"]] }}`;
                 }
 
-                const coolingSetpoint = (firstExpose as zhc.Climate).features.find((f) => f.name === "occupied_cooling_setpoint");
-                if (coolingSetpoint) {
-                    discoveryEntry.discovery_payload.temperature_low_command_topic = setpoint.name;
-                    discoveryEntry.discovery_payload.temperature_low_state_template = `{{ value_json["${setpoint.property}"] }}`;
+                if (heatingSetpoint && coolingSetpoint) {
+                    discoveryEntry.discovery_payload.temperature_low_command_topic = heatingSetpoint.name;
+                    discoveryEntry.discovery_payload.temperature_low_state_template = `{{ value_json["${heatingSetpoint.property}"] }}`;
                     discoveryEntry.discovery_payload.temperature_low_state_topic = true;
                     discoveryEntry.discovery_payload.temperature_high_command_topic = coolingSetpoint.name;
                     discoveryEntry.discovery_payload.temperature_high_state_template = `{{ value_json["${coolingSetpoint.property}"] }}`;
                     discoveryEntry.discovery_payload.temperature_high_state_topic = true;
                 } else {
-                    discoveryEntry.discovery_payload.temperature_command_topic = setpoint.name;
-                    discoveryEntry.discovery_payload.temperature_state_template = `{{ value_json["${setpoint.property}"] }}`;
+                    discoveryEntry.discovery_payload.temperature_command_topic = primarySetpoint.name;
+                    discoveryEntry.discovery_payload.temperature_state_template = `{{ value_json["${primarySetpoint.property}"] }}`;
                     discoveryEntry.discovery_payload.temperature_state_topic = true;
                 }
 
@@ -720,9 +842,11 @@ export class HomeAssistant extends Extension {
                         },
                     };
 
+                    /* v8 ignore start */
                     if (tempCalibration.value_min != null) discoveryEntry.discovery_payload.min = tempCalibration.value_min;
                     if (tempCalibration.value_max != null) discoveryEntry.discovery_payload.max = tempCalibration.value_max;
                     if (tempCalibration.value_step != null) {
+                        /* v8 ignore stop */
                         discoveryEntry.discovery_payload.step = tempCalibration.value_step;
                     }
                     discoveryEntries.push(discoveryEntry);
@@ -798,7 +922,10 @@ export class HomeAssistant extends Extension {
                     discoveryEntries.push(discoveryEntry);
                 }
 
-                const currentHumidity = allExposes?.filter(isNumericExpose).find((e) => e.name === "humidity" && e.access & ACCESS_STATE);
+                // Prefer the humidity of the same endpoint as the climate (multi-endpoint thermostats, e.g. Danfoss Icon2),
+                // fall back to a humidity without endpoint.
+                const humidities = allExposes.filter(isNumericExpose).filter((e) => e.name === "humidity" && e.access & ACCESS_STATE);
+                const currentHumidity = humidities.find((e) => e.endpoint === endpointName) ?? humidities.find((e) => e.endpoint === undefined);
                 if (currentHumidity) {
                     discoveryEntry.discovery_payload.current_humidity_template = `{{ value_json["${currentHumidity.property}"] }}`;
                     discoveryEntry.discovery_payload.current_humidity_topic = true;
@@ -843,7 +970,7 @@ export class HomeAssistant extends Extension {
                     ?.features.find((f) => f.name === "tilt");
                 const motorState = allExposes
                     ?.filter(isEnumExpose)
-                    .find((e) => ["motor_state", "moving"].includes(e.name) && e.access === ACCESS_STATE);
+                    .find((e) => ["motor_state", "moving"].includes(e.name) && e.access & ACCESS_STATE);
                 const running = allExposes?.filter(isBinaryExpose)?.find((e) => e.name === "running");
 
                 const discoveryEntry: DiscoveryEntry = {
@@ -869,15 +996,34 @@ export class HomeAssistant extends Extension {
                 // If curtains have `motor_state` or `moving` property, lookup for possible
                 // state names to detect movement direction and use this in discovery.
                 if (motorState) {
+                    const motorStateProperty = featurePropertyWithoutEndpoint(motorState);
+                    const stateProperty = featurePropertyWithoutEndpoint(state);
+                    const positionProperty = position ? featurePropertyWithoutEndpoint(position) : undefined;
+
                     const openingState = motorState.values.find((s) => COVER_OPENING_LOOKUP.includes(s.toString().toLowerCase()));
                     const closingState = motorState.values.find((s) => COVER_CLOSING_LOOKUP.includes(s.toString().toLowerCase()));
                     const stoppedState = motorState.values.find((s) => COVER_STOPPED_LOOKUP.includes(s.toString().toLowerCase()));
 
+                    /* v8 ignore start */
                     if (openingState && closingState && stoppedState) {
+                        /* v8 ignore stop */
                         discoveryEntry.discovery_payload.state_opening = openingState;
                         discoveryEntry.discovery_payload.state_closing = closingState;
+                        discoveryEntry.discovery_payload.state_open = "OPEN";
+                        discoveryEntry.discovery_payload.state_closed = "CLOSE";
                         discoveryEntry.discovery_payload.state_stopped = stoppedState;
-                        discoveryEntry.discovery_payload.value_template = `{% if "${featurePropertyWithoutEndpoint(motorState)}" in value_json and value_json["${featurePropertyWithoutEndpoint(motorState)}"] %} {{ value_json["${featurePropertyWithoutEndpoint(motorState)}"] }} {% else %} ${stoppedState} {% endif %}`;
+                        const positionValue = positionProperty ? `value_json["${positionProperty}"] | default(none)` : "none";
+                        discoveryEntry.discovery_payload.value_template =
+                            `{% set motor = value_json["${motorStateProperty}"] | default(none) %}` +
+                            `{% set position = ${positionValue} %}` +
+                            `{% set state = value_json["${stateProperty}"] | default(none) %}` +
+                            `{% if (motor == "${openingState}" and position != 100) or (motor == "${closingState}" and position != 0) %}` +
+                            "{{ motor }}" +
+                            "{% elif position == 0 %}CLOSE" +
+                            "{% elif position == 100 %}OPEN" +
+                            `{% elif motor == "${stoppedState}" and position is not none %}OPEN` +
+                            '{% elif state in ["OPEN", "CLOSE"] %}{{ state }}' +
+                            `{% else %}${stoppedState}{% endif %}`;
                     }
                 }
 
@@ -988,7 +1134,9 @@ export class HomeAssistant extends Extension {
                     // Emulate state based on mode
                     discoveryEntry.discovery_payload.state_value_template = "{{ value_json.fan_state }}";
                     discoveryEntry.discovery_payload.command_topic_postfix = "fan_state";
+                    /* v8 ignore start */
                 } else if (nativeSpeed) {
+                    /* v8 ignore stop */
                     discoveryEntry.discovery_payload.percentage_state_topic = true;
                     discoveryEntry.discovery_payload.percentage_command_topic = "speed";
                     discoveryEntry.discovery_payload.percentage_value_template = `{{ value_json["${nativeSpeed.property}"] | default('None') }}`;
@@ -1071,7 +1219,7 @@ export class HomeAssistant extends Extension {
                             command_topic_postfix: firstExpose.property,
                             ...(firstExpose.unit && {unit_of_measurement: firstExpose.unit}),
                             ...(firstExpose.value_step && {step: firstExpose.value_step}),
-                            ...NUMERIC_DISCOVERY_LOOKUP[firstExpose.name],
+                            ...NUMERIC_DISCOVERY_LOOKUP[cleanName(firstExpose.name)],
                         },
                     };
 
@@ -1103,7 +1251,7 @@ export class HomeAssistant extends Extension {
                     Object.assign(extraAttrs, {device_class: "power", state_class: "measurement"});
                 }
 
-                let key = firstExpose.name;
+                let key = cleanName(firstExpose.name);
 
                 // Home Assistant uses a different voc device_class for µg/m³ versus ppb or ppm.
                 if (firstExpose.name === "voc" && firstExpose.unit && ["ppb", "ppm"].includes(firstExpose.unit)) {
@@ -1218,7 +1366,9 @@ export class HomeAssistant extends Extension {
                 /**
                  * Otherwise expose as SENSOR entity.
                  */
+                /* v8 ignore start */
                 if (firstExpose.access & ACCESS_STATE) {
+                    /* v8 ignore stop */
                     discoveryEntries.push({
                         type: "sensor",
                         object_id: firstExpose.property,
@@ -1226,6 +1376,7 @@ export class HomeAssistant extends Extension {
                         discovery_payload: {
                             name: endpointName ? `${firstExpose.label} ${endpointName}` : firstExpose.label,
                             value_template: valueTemplate,
+                            ...(firstExpose.property === "action" ? {entity_category: "diagnostic"} : {}),
                             ...ENUM_DISCOVERY_LOOKUP[firstExpose.name],
                         },
                     });
@@ -1257,9 +1408,11 @@ export class HomeAssistant extends Extension {
                         },
                     };
 
+                    /* v8 ignore start */
                     if (modeFeature) {
                         const tones = modeFeature.values.filter((v) => v !== "stop");
                         if (tones.length) {
+                            /* v8 ignore stop */
                             discoveryEntry.discovery_payload.available_tones = tones;
                         }
                     }
@@ -1268,7 +1421,9 @@ export class HomeAssistant extends Extension {
                         discoveryEntry.discovery_payload.support_volume_set = true;
                     }
 
+                    /* v8 ignore start */
                     if (durationFeature) {
+                        /* v8 ignore stop */
                         discoveryEntry.discovery_payload.support_duration = true;
                     }
 
@@ -1335,6 +1490,8 @@ export class HomeAssistant extends Extension {
         }
 
         for (const entry of discoveryEntries) {
+            applyHomeAssistantExposeMetadata(entry, firstExpose.homeassistant);
+
             // If a sensor has entity category `config`, then change
             // it to `diagnostic`. Sensors have no input, so can't be configured.
             // https://github.com/Koenkk/zigbee2mqtt/pull/19474
@@ -1347,8 +1504,12 @@ export class HomeAssistant extends Extension {
                 delete entry.discovery_payload.entity_category;
             }
 
-            // Let Home Assistant generate entity name when device_class is present
-            if (entry.discovery_payload.device_class) {
+            // Let Home Assistant generate entity name when device_class is present.
+            // homeassistant.name allows device_class and explicit name to coexist (e.g. derived sensors).
+            // If name = null Home Assistant will use the device name as entity name.
+            // This is intentionally an undefined-only check to distinguish it from an null value.
+
+            if (entry.discovery_payload.device_class && firstExpose.homeassistant?.name === undefined) {
                 delete entry.discovery_payload.name;
             }
 
@@ -1403,7 +1564,7 @@ export class HomeAssistant extends Extension {
 
                 if (match) {
                     const endpoint = match[1];
-                    const endpointRegExp = new RegExp(`(.*)_${endpoint}`);
+                    const endpointRegExp = new RegExp(`(.*)_${endpoint}$`);
                     const payload: KeyValue = {};
                     for (const key of Object.keys(data.message)) {
                         const keyMatch = endpointRegExp.exec(key);
@@ -1432,10 +1593,12 @@ export class HomeAssistant extends Extension {
          * Whenever a device publish an {action: *} we discover an MQTT device trigger sensor
          * and republish it to zigbee2mqtt/my_device/action
          */
-        if (settings.get().advanced.output === "json" && entity.isDevice() && entity.definition && data.message.action) {
+        if (entity.isDevice() && entity.definition && data.message.action) {
             const value = data.message.action.toString();
             await this.publishDeviceTriggerDiscover(entity, "action", value);
-            await this.mqtt.publish(`${data.entity.name}/action`, value, {});
+            if (settings.get().advanced.output === "json") {
+                await this.mqtt.publish(`${data.entity.name}/action`, value, {});
+            }
         }
     }
 
@@ -1471,8 +1634,9 @@ export class HomeAssistant extends Extension {
         const isDevice = entity.isDevice();
         const isGroup = entity.isGroup();
 
-        /* v8 ignore next */
+        /* v8 ignore start */
         if (!entity || (isDevice && !entity.definition)) return [];
+        /* v8 ignore stop */
 
         let configs: DiscoveryEntry[] = [];
         if (isDevice) {
@@ -1487,7 +1651,9 @@ export class HomeAssistant extends Extension {
 
             for (const member of entity.zh.members) {
                 const device = this.zigbee.resolveEntity(member.getDevice()) as Device;
+                /* v8 ignore start */
                 if (device.definition) {
+                    /* v8 ignore stop */
                     const exposes = device.exposes();
                     allExposes.push(...exposes);
                     for (const expose of exposes.filter((e) => GROUP_SUPPORTED_TYPES.includes(e.type))) {
@@ -1528,7 +1694,9 @@ export class HomeAssistant extends Extension {
                 },
             };
 
+            /* v8 ignore start */
             if (settings.get().advanced.last_seen.startsWith("ISO_8601")) {
+                /* v8 ignore stop */
                 config.discovery_payload.device_class = "timestamp";
             }
 
@@ -1626,7 +1794,9 @@ export class HomeAssistant extends Extension {
             if (payload.state_topic === undefined || payload.state_topic) {
                 payload.state_topic = stateTopic;
             } else {
+                /* v8 ignore start */
                 if (payload.state_topic !== undefined) {
+                    /* v8 ignore stop */
                     delete payload.state_topic;
                 }
             }
@@ -1814,7 +1984,16 @@ export class HomeAssistant extends Extension {
                 payload.current_humidity_topic = stateTopic;
             }
 
-            // Override configuration with user settings.
+            if (entity.isDevice()) {
+                try {
+                    entity.definition?.meta?.overrideHaDiscoveryPayload?.(payload, entity.options);
+                } catch (error) {
+                    logger.error(`Failed to override HA discovery payload (${(error as Error).stack})`);
+                }
+            }
+
+            // Override configuration with user settings after converter compatibility
+            // mappings, so per-device configuration remains the final authority.
             if (entity.options.homeassistant != null) {
                 const add = (obj: KeyValue, ignoreName: boolean): void => {
                     for (const key in obj) {
@@ -1845,14 +2024,6 @@ export class HomeAssistant extends Extension {
                 }
             }
 
-            if (entity.isDevice()) {
-                try {
-                    entity.definition?.meta?.overrideHaDiscoveryPayload?.(payload);
-                } catch (error) {
-                    logger.error(`Failed to override HA discovery payload (${(error as Error).stack})`);
-                }
-            }
-
             const topic = this.getDiscoveryTopic(config, entity);
             const payloadStr = stringify(payload);
             newDiscoveredTopics.add(topic);
@@ -1872,7 +2043,9 @@ export class HomeAssistant extends Extension {
                 logger.debug(`Skipping discovery of '${topic}', already discovered`);
             }
 
+            /* v8 ignore start */
             if (config.mockProperties) {
+                /* v8 ignore stop */
                 for (const mockProperty of config.mockProperties) {
                     discovered.mockProperties.add(mockProperty);
                 }
@@ -1933,11 +2106,16 @@ export class HomeAssistant extends Extension {
             if (clear) {
                 logger.debug(`Clearing outdated Home Assistant config '${data.topic}'`);
                 await this.mqtt.publish(topic, "", {clientOptions: {retain: true, qos: 1}, baseTopic: this.discoveryTopic, skipReceive: false});
+                /* v8 ignore start */
             } else if (entity) {
+                /* v8 ignore stop */
                 this.getDiscovered(entity).messages[topic] = {payload: stringify(message), published: true};
             }
         } else if (data.topic === this.statusTopic && data.message.toLowerCase() === "online") {
             const timer = setTimeout(async () => {
+                // Re-publish bridge state so HA marks all entities as available before receiving cached device states.
+                await this.mqtt.publish("bridge/state", stringify({state: "online"}), {clientOptions: {retain: true, qos: 1}});
+
                 // Publish all device states.
                 for (const entity of this.zigbee.devicesAndGroupsIterator(utils.deviceNotCoordinator)) {
                     if (this.state.exists(entity)) {

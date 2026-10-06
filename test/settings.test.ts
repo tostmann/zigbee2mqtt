@@ -3,11 +3,15 @@ import {beforeEach, describe, expect, it} from "vitest";
 import "./mocks/data";
 
 import fs from "node:fs";
-import yaml from "js-yaml";
-import objectAssignDeep from "object-assign-deep";
+import {dump, load} from "js-yaml";
 
 import mockedData from "../lib/util/data";
+import {objectAssignDeep} from "../lib/util/objectAssignDeep";
 import * as settings from "../lib/util/settings";
+
+// mirrors the global `KeyValue`, which is not visible from the test project, previously implied by the untyped `object-assign-deep`
+// biome-ignore lint/suspicious/noExplicitAny: freely mutated to build the expected settings
+type ExpectedSettings = Record<string, any>;
 
 const configurationFile = mockedData.joinPath("configuration.yaml");
 const devicesFile = mockedData.joinPath("devices.yaml");
@@ -21,14 +25,14 @@ const minimalConfig = {
 
 describe("Settings", () => {
     const write = (file: string, json: Record<string, unknown>, reread = true): void => {
-        fs.writeFileSync(file, yaml.dump(json));
+        fs.writeFileSync(file, dump(json));
 
         if (reread) {
             settings.reRead();
         }
     };
 
-    const read = (file: string): unknown => yaml.load(fs.readFileSync(file, "utf8"));
+    const read = (file: string): unknown => load(fs.readFileSync(file, "utf8"));
 
     const remove = (file: string): void => {
         if (fs.existsSync(file)) {
@@ -86,8 +90,7 @@ describe("Settings", () => {
     it("Should return default settings", () => {
         write(configurationFile, {});
         const s = settings.get();
-        // @ts-expect-error workaround
-        const expected = objectAssignDeep.noMutate({}, settings.testing.defaults);
+        const expected: ExpectedSettings = objectAssignDeep({}, settings.testing.defaults);
         expected.devices = {};
         expected.groups = {};
         expect(s).toStrictEqual(expected);
@@ -96,8 +99,7 @@ describe("Settings", () => {
     it("Should return settings", () => {
         write(configurationFile, {serial: {disable_led: true}});
         const s = settings.get();
-        // @ts-expect-error workaround
-        const expected = objectAssignDeep.noMutate({}, settings.testing.defaults);
+        const expected: ExpectedSettings = objectAssignDeep({}, settings.testing.defaults);
         expected.devices = {};
         expected.groups = {};
         expected.serial = {disable_led: true};
@@ -124,8 +126,7 @@ describe("Settings", () => {
             },
         };
 
-        // @ts-expect-error workaround
-        const expected = objectAssignDeep.noMutate({}, settings.testing.defaults);
+        const expected: ExpectedSettings = objectAssignDeep({}, settings.testing.defaults);
         expected.devices = {
             "0x00158d00018255df": {
                 friendly_name: "0x00158d00018255df",
@@ -178,8 +179,7 @@ describe("Settings", () => {
 
         write(configurationFile, {});
 
-        // @ts-expect-error workaround
-        const expected = objectAssignDeep.noMutate({}, settings.testing.defaults);
+        const expected: ExpectedSettings = objectAssignDeep({}, settings.testing.defaults);
         expected.frontend.enabled = true;
         expected.frontend.port = 8099;
         expected.homeassistant.enabled = true;
@@ -212,8 +212,7 @@ describe("Settings", () => {
             expect(settings.validate()).toStrictEqual([]);
 
             const s = settings.get();
-            // @ts-expect-error workaround
-            const expected = objectAssignDeep.noMutate({groups: {}, devices: {}}, settings.testing.defaults);
+            const expected: ExpectedSettings = objectAssignDeep({}, {groups: {}, devices: {}}, settings.testing.defaults);
             expected.mqtt.password = "password-in-env-var";
             expected.mqtt.server = "server";
             expect(s).toStrictEqual(expected);

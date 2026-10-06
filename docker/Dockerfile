@@ -1,6 +1,6 @@
 ARG TARGETPLATFORM
 
-FROM alpine:3.23 AS base
+FROM alpine:3.24 AS base
 
 ENV NODE_ENV=production
 WORKDIR /app
@@ -8,8 +8,10 @@ RUN apk add --no-cache tzdata eudev tini nodejs
 
 # Dependencies and build
 FROM base AS deps
+# prevent pnpm from using interactive mode
+ENV CI=true
 
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY scripts/ ./scripts/
 
 # Make and such are needed to compile serialport for riscv64

@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import bind from "bind-decorator";
-import stringify from "json-stable-stringify-without-jsonify";
-import JSZip from "jszip";
-import objectAssignDeep from "object-assign-deep";
+import {zip} from "fflate";
 import type winston from "winston";
 import Transport from "winston-transport";
 import {Zcl} from "zigbee-herdsman";
@@ -14,7 +12,9 @@ import type Group from "../model/group";
 import type {Zigbee2MQTTAPI, Zigbee2MQTTDevice, Zigbee2MQTTResponse, Zigbee2MQTTResponseEndpoints} from "../types/api";
 import data from "../util/data";
 import logger from "../util/logger";
+import {objectAssignDeep} from "../util/objectAssignDeep";
 import * as settings from "../util/settings";
+import {stringify} from "../util/stringify";
 import utils, {assertString, DEFAULT_BIND_GROUP_ID} from "../util/utils";
 import Extension from "./extension";
 
@@ -141,6 +141,7 @@ export default class Bridge extends Extension {
             await this.mqtt.publish("bridge/event", stringify(payload));
         });
         this.eventBus.onDeviceLeave(this, async (data) => {
+            await this.publishGroups();
             await this.publishDevices();
             await this.publishDefinitions();
 
@@ -243,7 +244,10 @@ export default class Bridge extends Extension {
         }
 
         const newSettings = message.options as Partial<Settings>;
-        this.restartRequired = settings.apply(newSettings);
+        const newRestartRequired = settings.apply(newSettings);
+        if (newRestartRequired) {
+            this.restartRequired = newRestartRequired;
+        }
 
         // Apply some settings on-the-fly.
         if (newSettings.homeassistant) {
@@ -262,7 +266,11 @@ export default class Bridge extends Extension {
             logger.setDebugNamespaceIgnore(settings.get().advanced.log_debug_namespace_ignore);
         }
 
-        logger.info("Successfully changed options");
+        if (newRestartRequired) {
+            logger.info("Changes require restart to take effect");
+        } else {
+            logger.info("Successfully changed options");
+        }
         await this.publishInfo();
         return utils.getResponse(message, {restart_required: this.restartRequired});
     }
@@ -321,7 +329,7 @@ export default class Bridge extends Extension {
         await this.zigbee.backup();
         const dataPath = data.getPath();
         const files = utils.getAllFiles(dataPath);
-        const zip = new JSZip();
+        const zipFiles: Record<string, Uint8Array> = {};
         const logDir = `log${path.sep}`;
         const otaDir = `ota${path.sep}`;
 
@@ -330,12 +338,17 @@ export default class Bridge extends Extension {
 
             // XXX: `log` could technically be something else depending on `log_directory` setting
             if (!name.startsWith(logDir) && !name.startsWith(otaDir)) {
-                zip.file(name, fs.readFileSync(f));
+                zipFiles[name] = fs.readFileSync(f);
             }
         }
 
-        const base64Zip = await zip.generateAsync({type: "base64"});
-        return utils.getResponse(message, {zip: base64Zip});
+        const zipContent = await new Promise<Uint8Array>((resolve, reject) => {
+            // `jszip` defaulted to `STORE`, so backups used to be uncompressed; `fflate`'s default level shrinks them substantially
+            zip(zipFiles, {level: 6}, (error, data) => (error ? reject(error) : resolve(data)));
+        });
+
+        // TODO: replace with `zipContent.toBase64()` once the Node requirement is >=25
+        return utils.getResponse(message, {zip: Buffer.from(zipContent).toString("base64")});
     }
 
     @bind async installCodeAdd(message: KeyValue | string): Promise<Zigbee2MQTTResponse<"bridge/response/install_code/add">> {
@@ -453,6 +466,20 @@ export default class Bridge extends Extension {
 
         const ID = message.id;
         const entity = this.getEntity(entityType, ID);
+
+        if (entity instanceof Device) {
+            const supportedOptions = new Set(Object.keys(settings.schemaJson.definitions.device.properties));
+            for (const option of entity.definition?.options ?? []) {
+                supportedOptions.add(option.property);
+            }
+
+            for (const option of Object.keys(message.options)) {
+                if (!supportedOptions.has(option)) {
+                    logger.warning(`Device '${ID}' does not support option '${option}'`);
+                }
+            }
+        }
+
         const oldOptions = objectAssignDeep({}, cleanup(entity.options));
 
         if (message.options.icon) {
@@ -464,12 +491,16 @@ export default class Bridge extends Extension {
             }
         }
 
-        const restartRequired = settings.changeEntityOptions(ID, message.options);
-        if (restartRequired) this.restartRequired = true;
+        const newRestartRequired = settings.changeEntityOptions(ID, message.options);
+        if (newRestartRequired) this.restartRequired = true;
         const newOptions = cleanup(entity.options);
         await this.publishInfo();
 
-        logger.info(`Changed config for ${entityType} ${ID}`);
+        if (newRestartRequired) {
+            logger.info(`New config for ${entityType} ${ID} requires restart to take effect`);
+        } else {
+            logger.info(`Successfully changed config for ${entityType} ${ID}`);
+        }
 
         this.eventBus.emitEntityOptionsChanged({from: oldOptions, to: newOptions, entity});
         return utils.getResponse(message, {from: oldOptions, to: newOptions, id: ID, restart_required: this.restartRequired});
@@ -653,20 +684,27 @@ export default class Bridge extends Extension {
         entityType: T,
         message: string | KeyValue,
     ): Promise<Zigbee2MQTTResponse<T extends "device" ? "bridge/response/device/remove" : "bridge/response/group/remove">> {
-        const ID = typeof message === "object" ? message.id : message.trim();
+        const messageIsObject = typeof message === "object";
+        const ID = messageIsObject ? message.id : message.trim();
         const entity = this.getEntity(entityType, ID);
         // note: entity.name is dynamically retrieved, will change once device is removed (friendly => ieee)
         const friendlyName = entity.name;
         let block = false;
         let force = false;
+        let keepConfig = false;
+        let clearCache = false;
         let blockForceLog = "";
 
-        if (entityType === "device" && typeof message === "object") {
-            block = !!message.block;
-            force = !!message.force;
-            blockForceLog = ` (block: ${block}, force: ${force})`;
-        } else if (entityType === "group" && typeof message === "object") {
-            force = !!message.force;
+        if (entityType === "device" && messageIsObject) {
+            const payload = message as Zigbee2MQTTAPI["bridge/request/device/remove"];
+            block = !!payload.block;
+            force = !!payload.force;
+            keepConfig = !!payload.keep_config;
+            clearCache = !!payload.clear_cache;
+            blockForceLog = ` (block: ${block}, force: ${force}, keep config: ${keepConfig}, clear cache: ${clearCache})`;
+        } else if (entityType === "group" && messageIsObject) {
+            const payload = message as Zigbee2MQTTAPI["bridge/request/group/remove"];
+            force = !!payload.force;
             blockForceLog = ` (force: ${force})`;
         }
 
@@ -679,12 +717,18 @@ export default class Bridge extends Extension {
                 }
 
                 if (force) {
-                    entity.zh.removeFromDatabase();
+                    entity.zh.removeFromDatabase(clearCache);
                 } else {
-                    await entity.zh.removeFromNetwork();
+                    await entity.zh.removeFromNetwork(clearCache);
                 }
 
-                settings.removeDevice(entity.ID as string);
+                if (clearCache) {
+                    this.zigbee.removeDeviceFromLookup(entity.ID);
+                }
+
+                if (!keepConfig) {
+                    settings.removeDevice(entity.ID as string);
+                }
             } else {
                 if (force) {
                     entity.zh.removeFromDatabase();
@@ -706,18 +750,23 @@ export default class Bridge extends Extension {
 
             logger.info(`Successfully removed ${entityType} '${friendlyName}'${blockForceLog}`);
 
+            await this.publishGroups();
+
             if (entity instanceof Device) {
-                await this.publishGroups();
                 await this.publishDevices();
                 // Refresh Cluster definition
                 await this.publishDefinitions();
 
-                const responseData: Zigbee2MQTTAPI["bridge/response/device/remove"] = {id: ID, block, force};
+                const responseData: Zigbee2MQTTAPI["bridge/response/device/remove"] = {
+                    id: ID,
+                    block,
+                    force,
+                    keep_config: keepConfig,
+                    clear_cache: clearCache,
+                };
 
                 return utils.getResponse(message, responseData);
             }
-
-            await this.publishGroups();
 
             const responseData: Zigbee2MQTTAPI["bridge/response/group/remove"] = {id: ID, force};
 
@@ -887,8 +936,7 @@ export default class Bridge extends Extension {
         let icon = device.options.icon ?? definitionIcon;
 
         if (icon) {
-            /* v8 ignore next */
-            icon = icon.replace("$zigbeeModel", utils.sanitizeImageParameter(device.zh.modelID ?? ""));
+            icon = icon.replace("$zigbeeModel", utils.sanitizeImageParameter(/* v8 ignore next */ device.zh.modelID ?? ""));
             icon = icon.replace("$model", utils.sanitizeImageParameter(device.definition.model));
         }
 

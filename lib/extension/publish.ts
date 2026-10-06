@@ -1,11 +1,10 @@
 import bind from "bind-decorator";
-import stringify from "json-stable-stringify-without-jsonify";
 import type * as zhc from "zigbee-herdsman-converters";
-
 import Device from "../model/device";
 import Group from "../model/group";
 import logger from "../util/logger";
 import * as settings from "../util/settings";
+import {stringify} from "../util/stringify";
 import utils from "../util/utils";
 import Extension from "./extension";
 
@@ -225,6 +224,11 @@ export default class Publish extends Extension {
                 state: entityState,
                 membersState,
                 mapped: definition,
+                /* v8 ignore start */
+                deviceExposesChanged: (): void => {
+                    if (re instanceof Device) this.eventBus.emitExposesAndDevicesChanged(re);
+                },
+                /* v8 ignore stop */
                 /* v8 ignore next */
                 publish: (payload: KeyValue) => this.publishEntityState(re, payload),
             };

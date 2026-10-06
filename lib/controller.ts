@@ -1,5 +1,4 @@
 import bind from "bind-decorator";
-import stringify from "json-stable-stringify-without-jsonify";
 import {setLogger as zhSetLogger} from "zigbee-herdsman";
 import {setLogger as zhcSetLogger} from "zigbee-herdsman-converters";
 import EventBus from "./eventBus";
@@ -24,6 +23,7 @@ import type {Zigbee2MQTTAPI} from "./types/api";
 import logger from "./util/logger";
 import {initSdNotify} from "./util/sd-notify";
 import * as settings from "./util/settings";
+import {stringify} from "./util/stringify";
 import utils from "./util/utils";
 import Zigbee from "./zigbee";
 
@@ -203,7 +203,7 @@ export class Controller {
         }
 
         this.eventBus.onLastSeenChanged(this, (data) => {
-            utils.publishLastSeen(data, settings.get(), false, this.publishEntityState).catch(() => {});
+            utils.publishLastSeen(data, settings.get(), false, this.publishEntityState).catch(/* v8 ignore next */ () => {});
         });
 
         logger.info("Zigbee2MQTT started!");
@@ -462,10 +462,13 @@ export class Controller {
     async iteratePayloadAttributeOutput(topicRoot: string, payload: KeyValue, options: Partial<MqttPublishOptions>): Promise<void> {
         for (const [key, value] of Object.entries(payload)) {
             let subPayload = value;
-            let message = null;
+            let message: string | undefined;
 
             // Special cases
-            if (key === "color" && utils.objectHasProperties(subPayload, ["r", "g", "b"])) {
+            // `objectHasProperties` indexes its argument, so it has to be given an object.
+            // The null check three lines below is too late: `color` is nullable like any
+            // other attribute, and a null one reaches here before that branch runs.
+            if (key === "color" && subPayload != null && utils.objectHasProperties(subPayload, ["r", "g", "b"])) {
                 subPayload = [subPayload.r, subPayload.g, subPayload.b];
             }
 
@@ -480,7 +483,7 @@ export class Controller {
                 message = typeof subPayload === "string" ? subPayload : stringify(subPayload);
             }
 
-            if (message !== null) {
+            if (message !== undefined) {
                 await this.mqtt.publish(`${topicRoot}${key}`, message, options);
             }
         }

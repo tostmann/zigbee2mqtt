@@ -1,9 +1,9 @@
 import bind from "bind-decorator";
-import stringify from "json-stable-stringify-without-jsonify";
 import Device from "../model/device";
 import type {Zigbee2MQTTAPI} from "../types/api";
 import logger from "../util/logger";
 import * as settings from "../util/settings";
+import {stringify} from "../util/stringify";
 import utils from "../util/utils";
 import Extension from "./extension";
 
@@ -137,7 +137,7 @@ export default class Configure extends Extension {
             logger.info(`Successfully configured '${device.name}' (definition v${definitionVersion})`);
             device.zh.meta.configured = definitionVersion;
             device.zh.save();
-            this.eventBus.emitDevicesChanged();
+            this.eventBus.emitExposesAndDevicesChanged(device);
         } catch (error) {
             const newAttempts = attempts + 1;
             this.attempts.set(device.ieeeAddr, newAttempts);

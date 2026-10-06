@@ -9,7 +9,7 @@ import type {Device as ZhDevice} from "../mocks/zigbeeHerdsman";
 import {devices, groups, events as mockZHEvents} from "../mocks/zigbeeHerdsman";
 
 import assert from "node:assert";
-import stringify from "json-stable-stringify-without-jsonify";
+import {stringify} from "../../lib/util/stringify";
 import type {MockInstance} from "vitest";
 import * as zhc from "zigbee-herdsman-converters";
 import type {KeyValueAny} from "zigbee-herdsman-converters/lib/types";
@@ -126,6 +126,178 @@ describe("Extension: HomeAssistant", () => {
         }
 
         expect(duplicated).toStrictEqual([]);
+    });
+
+    it("Should mark thermostat configuration toggles as config entities", () => {
+        const switchExposes = [
+            new zhc.Switch().withLabel("Auto lock").withState("auto_lock", false, "Enable/disable auto lock", zhc.access.STATE_SET, "AUTO", "MANUAL"),
+            new zhc.Switch().withLabel("Away mode").withState("away_mode", false, "Enable/disable away mode", zhc.access.STATE_SET),
+            new zhc.Switch().withLabel("Valve detection").withState("valve_detection", true, "Valve detection", zhc.access.STATE_SET),
+            new zhc.Switch()
+                .withLabel("Window detection")
+                .withState("window_detection", true, "Enables/disables window detection", zhc.access.STATE_SET),
+        ];
+        const binaryExposes = [
+            new zhc.Binary("frost_protection", zhc.access.STATE_SET, "ON", "OFF").withDescription("Anti-freeze protection"),
+            new zhc.Binary("heating_stop", zhc.access.STATE_SET, "ON", "OFF").withDescription("Heating stop"),
+            new zhc.Binary("away_mode", zhc.access.STATE_SET, "ON", "OFF").withDescription("Away mode"),
+            new zhc.Binary("window_detection", zhc.access.STATE_SET, "ON", "OFF").withDescription("Open window detection"),
+        ];
+        const getDiscoveryConfigs = (expose: zhc.Expose): KeyValueAny[] => {
+            const device = {
+                definition: {},
+                isDevice: (): boolean => true,
+                isGroup: (): boolean => false,
+                endpoint: () => undefined,
+                options: {},
+                exposes: (): zhc.Expose[] => [expose],
+                zh: {endpoints: []},
+            };
+            // @ts-expect-error private method and minimal test device
+            return extension.getConfigs(device);
+        };
+
+        for (const expose of switchExposes) {
+            const [config] = getDiscoveryConfigs(expose);
+            expect(config.type).toStrictEqual("switch");
+            expect(config.object_id).toStrictEqual(expose.features[0].property);
+            expect(config.discovery_payload.entity_category).toStrictEqual("config");
+            expect(config.discovery_payload.command_topic_postfix).toStrictEqual(expose.features[0].property);
+        }
+
+        for (const expose of binaryExposes) {
+            const [config] = getDiscoveryConfigs(expose);
+            expect(config.type).toStrictEqual("switch");
+            expect(config.object_id).toStrictEqual(`switch_${expose.name}`);
+            expect(config.discovery_payload.entity_category).toStrictEqual("config");
+            expect(config.discovery_payload.command_topic_postfix).toStrictEqual(expose.property);
+        }
+    });
+
+    it("Should mark device settings as config entities", () => {
+        const getDiscoveryConfigs = (expose: zhc.Expose): KeyValueAny[] => {
+            const device = {
+                definition: {},
+                isDevice: (): boolean => true,
+                isGroup: (): boolean => false,
+                endpoint: () => undefined,
+                options: {},
+                exposes: (): zhc.Expose[] => [expose],
+                zh: {endpoints: []},
+            };
+            // @ts-expect-error private method and minimal test device
+            return extension.getConfigs(device);
+        };
+
+        const enumExposes = [
+            new zhc.Enum("set_limits", zhc.access.STATE_SET, ["START", "END", "RESET"]),
+            new zhc.Enum("motor_direction", zhc.access.STATE_SET, ["forward", "back"]),
+            new zhc.Enum("temperature_unit", zhc.access.STATE_SET, ["celsius", "fahrenheit"]),
+        ];
+
+        for (const expose of enumExposes) {
+            const [config] = getDiscoveryConfigs(expose);
+            expect(config.type).toStrictEqual("select");
+            expect(config.object_id).toStrictEqual(expose.property);
+            expect(config.discovery_payload.entity_category).toStrictEqual("config");
+        }
+
+        const binaryExposes = [
+            new zhc.Binary("tilt_mode", zhc.access.STATE_SET, "ON", "OFF"),
+            new zhc.Binary("calibration_left", zhc.access.STATE_SET, "ON", "OFF"),
+            new zhc.Binary("motor_reversal_right", zhc.access.STATE_SET, "ON", "OFF"),
+            new zhc.Binary("enable_display", zhc.access.STATE_SET, "ON", "OFF"),
+            new zhc.Binary("indicator", zhc.access.STATE_SET, "ON", "OFF"),
+        ];
+
+        for (const expose of binaryExposes) {
+            const [config] = getDiscoveryConfigs(expose);
+            expect(config.type).toStrictEqual("switch");
+            expect(config.object_id).toStrictEqual(`switch_${expose.property}`);
+            expect(config.discovery_payload.entity_category).toStrictEqual("config");
+        }
+
+        const numericExposes = [
+            new zhc.Numeric("calibration_time_left", zhc.access.STATE_SET),
+            new zhc.Numeric("comfort_temperature_min", zhc.access.STATE_SET),
+            new zhc.Numeric("comfort_humidity_max", zhc.access.STATE_SET),
+            new zhc.Numeric("measurement_interval", zhc.access.STATE_SET),
+            new zhc.Numeric("minimum_range", zhc.access.STATE_SET),
+            new zhc.Numeric("maximum_range", zhc.access.STATE_SET),
+            new zhc.Numeric("detection_delay", zhc.access.STATE_SET),
+            new zhc.Numeric("fading_time", zhc.access.STATE_SET),
+            new zhc.Numeric("large_motion_detection_sensitivity", zhc.access.STATE_SET),
+            new zhc.Numeric("medium_motion_detection_distance", zhc.access.STATE_SET),
+            new zhc.Numeric("small_detection_sensitivity", zhc.access.STATE_SET),
+            new zhc.Numeric("soil_calibration", zhc.access.STATE_SET),
+            new zhc.Numeric("soil_sampling", zhc.access.STATE_SET),
+            new zhc.Numeric("soil_warning", zhc.access.STATE_SET),
+        ];
+
+        for (const expose of numericExposes) {
+            const [config] = getDiscoveryConfigs(expose);
+            expect(config.type).toStrictEqual("number");
+            expect(config.object_id).toStrictEqual(expose.property);
+            expect(config.discovery_payload.entity_category).toStrictEqual("config");
+        }
+
+        const [textConfig] = getDiscoveryConfigs(new zhc.Text("schedule_settings", zhc.access.STATE_SET));
+        expect(textConfig.type).toStrictEqual("text");
+        expect(textConfig.object_id).toStrictEqual("schedule_settings");
+        expect(textConfig.discovery_payload.entity_category).toStrictEqual("config");
+    });
+
+    it("Should apply expose-level Home Assistant discovery metadata", () => {
+        const createDevice = (exposes: zhc.Expose[]): Device =>
+            ({
+                definition: {},
+                isDevice: (): boolean => true,
+                isGroup: (): boolean => false,
+                endpoint: () => undefined,
+                options: {},
+                exposes: (): zhc.Expose[] => exposes,
+                zh: {endpoints: []},
+            }) as Device;
+
+        const voltageExpose = new zhc.Numeric("voltage", zhc.access.STATE).withUnit("V");
+        Object.assign(voltageExpose, {
+            homeassistant: {
+                type: "valve",
+                entityCategory: "diagnostic",
+                deviceClass: "voltage",
+                enabledByDefault: false,
+                icon: "mdi:flash",
+            },
+        });
+
+        // @ts-expect-error private
+        const configs = extension.getConfigs(createDevice([voltageExpose]));
+        expect(configs.find((config) => config.object_id === "voltage")?.discovery_payload).toMatchObject({
+            device_class: "voltage",
+            enabled_by_default: false,
+            entity_category: "diagnostic",
+            icon: "mdi:flash",
+        });
+        expect(configs.find((config) => config.object_id === "voltage")?.discovery_payload).not.toHaveProperty("type");
+    });
+
+    it("Should set discovery name to null when expose specifies homeassistant name null", () => {
+        const createDevice = (exposes: zhc.Expose[]): Device =>
+            ({
+                definition: {},
+                isDevice: (): boolean => true,
+                isGroup: (): boolean => false,
+                endpoint: () => undefined,
+                options: {},
+                exposes: (): zhc.Expose[] => exposes,
+                zh: {endpoints: []},
+            }) as Device;
+
+        const contactExpose = new zhc.Binary("contact", zhc.access.STATE, false, true).withHomeAssistant({name: null});
+
+        // @ts-expect-error private
+        const configs = extension.getConfigs(createDevice([contactExpose]));
+        expect(configs.find((config) => config.object_id === "contact")?.discovery_payload.name).toBeNull();
     });
 
     it("Should discover devices and groups", async () => {
@@ -492,7 +664,7 @@ describe("Extension: HomeAssistant", () => {
             unique_id: "0x0017880104e45520_action_zigbee2mqtt",
             // Needs to be updated whenever one of the ACTION_*_PATTERN constants changes.
             value_template:
-                "{% set patterns = [\n{\"pattern\": '^(?P<button>(?:button_)?[a-z0-9]+)_(?P<action>(?:press|hold)(?:_release)?)$', \"groups\": [\"button\", \"action\"]},\n{\"pattern\": '^(?P<action>recall|scene)_(?P<scene>[0-2][0-9]{0,2})$', \"groups\": [\"action\", \"scene\"]},\n{\"pattern\": '^(?P<actionPrefix>region_)(?P<region>[1-9]|10)_(?P<action>enter|leave|occupied|unoccupied)$', \"groups\": [\"actionPrefix\", \"region\", \"action\"]},\n{\"pattern\": '^(?P<action>dial_rotate)_(?P<direction>left|right)_(?P<speed>step|slow|fast)$', \"groups\": [\"action\", \"direction\", \"speed\"]},\n{\"pattern\": '^(?P<action>brightness_step)(?:_(?P<direction>up|down))?$', \"groups\": [\"action\", \"direction\"]}\n] %}\n{% set action_value = value_json.action|default('') %}\n{% set ns = namespace(r=[('action', action_value)]) %}\n{% for p in patterns %}\n  {% set m = action_value|regex_findall(p.pattern) %}\n  {% if m[0] is undefined %}{% continue %}{% endif %}\n  {% for key, value in zip(p.groups, m[0]) %}\n    {% set ns.r = ns.r|rejectattr(0, 'eq', key)|list + [(key, value)] %}\n  {% endfor %}\n{% endfor %}\n{% if (ns.r|selectattr(0, 'eq', 'actionPrefix')|first) is defined %}\n  {% set ns.r = ns.r|rejectattr(0, 'eq', 'action')|list + [('action', ns.r|selectattr(0, 'eq', 'actionPrefix')|map(attribute=1)|first + ns.r|selectattr(0, 'eq', 'action')|map(attribute=1)|first)] %}\n{% endif %}\n{% set ns.r = ns.r + [('event_type', ns.r|selectattr(0, 'eq', 'action')|map(attribute=1)|first)] %}\n{{dict.from_keys(ns.r|rejectattr(0, 'in', ('action', 'actionPrefix'))|reject('eq', ('event_type', None))|reject('eq', ('event_type', '')))|to_json}}",
+                "{% set patterns = [\n{\"pattern\": '^(?P<button>(?:button_)?[a-z0-9]+)_(?P<action>(?:press|hold|single|double)(?:_release)?)$', \"groups\": [\"button\", \"action\"]},\n{\"pattern\": '^(?P<action>recall|scene)_(?P<scene>[0-9]+)$', \"groups\": [\"action\", \"scene\"]},\n{\"pattern\": '^(?P<actionPrefix>region_)(?P<region>[1-9]|10)_(?P<action>enter|leave|occupied|unoccupied)$', \"groups\": [\"actionPrefix\", \"region\", \"action\"]},\n{\"pattern\": '^(?P<action>dial_rotate)_(?P<direction>left|right)_(?P<speed>step|slow|fast)$', \"groups\": [\"action\", \"direction\", \"speed\"]},\n{\"pattern\": '^(?P<action>brightness_step|color_temperature_step|color_saturation_step|color_hue_step)(?:_(?P<direction>up|down))?$', \"groups\": [\"action\", \"direction\"]}\n] %}\n{% set action_value = value_json.action|default('') %}\n{% set ns = namespace(r=[('action', action_value)]) %}\n{% for p in patterns %}\n  {% set m = action_value|regex_findall(p.pattern) %}\n  {% if m[0] is undefined %}{% continue %}{% endif %}\n  {% for key, value in zip(p.groups, m[0]) %}\n    {% set ns.r = ns.r|rejectattr(0, 'eq', key)|list + [(key, value)] %}\n  {% endfor %}\n{% endfor %}\n{% if (ns.r|selectattr(0, 'eq', 'actionPrefix')|first) is defined %}\n  {% set ns.r = ns.r|rejectattr(0, 'eq', 'action')|list + [('action', ns.r|selectattr(0, 'eq', 'actionPrefix')|map(attribute=1)|first + ns.r|selectattr(0, 'eq', 'action')|map(attribute=1)|first)] %}\n{% endif %}\n{% set ns.r = ns.r + [('event_type', ns.r|selectattr(0, 'eq', 'action')|map(attribute=1)|first)] %}\n{{dict.from_keys(ns.r|rejectattr(0, 'in', ('action', 'actionPrefix'))|reject('eq', ('event_type', None))|reject('eq', ('event_type', '')))|to_json}}",
         };
 
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith("homeassistant/event/0x0017880104e45520/action/config", stringify(payload), {
@@ -517,13 +689,23 @@ describe("Extension: HomeAssistant", () => {
         ["region_*_leave", {action: "region_leave", region: "wildcard"}],
         ["left_press", {action: "press", button: "left"}],
         ["left_press_release", {action: "press_release", button: "left"}],
+        ["1_single", {action: "single", button: "1"}],
+        ["2_single", {action: "single", button: "2"}],
+        ["1_double", {action: "double", button: "1"}],
+        ["1_hold", {action: "hold", button: "1"}],
         ["right_hold", {action: "hold", button: "right"}],
         ["right_hold_release", {action: "hold_release", button: "right"}],
         ["button_4_hold_release", {action: "hold_release", button: "button_4"}],
+        ["scene_1", {action: "scene", scene: "1"}],
+        ["scene_10", {action: "scene", scene: "10"}],
+        ["scene_4", {action: "scene", scene: "4"}],
         ["dial_rotate_left_step", {action: "dial_rotate", direction: "left", speed: "step"}],
         ["dial_rotate_right_fast", {action: "dial_rotate", direction: "right", speed: "fast"}],
         ["brightness_step_up", {action: "brightness_step", direction: "up"}],
         ["brightness_stop", {action: "brightness_stop"}],
+        ["color_temperature_step_up", {action: "color_temperature_step", direction: "up"}],
+        ["color_saturation_step_up", {action: "color_saturation_step", direction: "up"}],
+        ["color_hue_step_up", {action: "color_hue_step", direction: "up"}],
     ])("Should parse action names correctly", (action, expected) => {
         expect(extension.parseActionValue(action)).toStrictEqual(expected);
     });
@@ -1196,6 +1378,95 @@ describe("Extension: HomeAssistant", () => {
         });
     });
 
+    it("Should discover analog input on unsupported devices with device class and name", () => {
+        const payload = {
+            availability: [
+                {
+                    topic: "zigbee2mqtt/bridge/state",
+                    value_template: "{{ value_json.state }}",
+                },
+            ],
+            default_entity_id: "sensor.0x0017880104e45518_analog_in_temperature_1",
+            device: {
+                identifiers: ["zigbee2mqtt_0x0017880104e45518"],
+                manufacturer: "notSupportedMfg",
+                model: "Automatically generated definition",
+                model_id: "notSupportedModelID",
+                name: "0x0017880104e45518",
+                via_device: "zigbee2mqtt_bridge_0x00124b00120144ae",
+            },
+            device_class: "temperature",
+            enabled_by_default: true,
+            name: "my_sensor_name",
+            object_id: "0x0017880104e45518_analog_in_temperature_1",
+            origin: origin,
+            state_class: "measurement",
+            state_topic: "zigbee2mqtt/0x0017880104e45518",
+            unique_id: "0x0017880104e45518_analog_in_temperature_1_zigbee2mqtt",
+            unit_of_measurement: "°C",
+            value_template: '{{ value_json["analog_in_temperature_1"] }}',
+        };
+
+        expect(mockMQTTPublishAsync).toHaveBeenCalledWith(
+            "homeassistant/sensor/0x0017880104e45518/analog_in_temperature_1/config",
+            stringify(payload),
+            {
+                retain: true,
+                qos: 1,
+            },
+        );
+    });
+
+    it("Should discover analog output on unsupported devices", () => {
+        const payload = {
+            availability: [
+                {
+                    topic: "zigbee2mqtt/bridge/state",
+                    value_template: "{{ value_json.state }}",
+                },
+            ],
+            command_topic: "zigbee2mqtt/0x0017880104e45518/2/set/analog_output_2",
+            default_entity_id: "number.0x0017880104e45518_analog_output_2",
+            device: {
+                identifiers: ["zigbee2mqtt_0x0017880104e45518"],
+                manufacturer: "notSupportedMfg",
+                model: "Automatically generated definition",
+                model_id: "notSupportedModelID",
+                name: "0x0017880104e45518",
+                via_device: "zigbee2mqtt_bridge_0x00124b00120144ae",
+            },
+            name: "my_number_name",
+            object_id: "0x0017880104e45518_analog_output_2",
+            origin: origin,
+            state_topic: "zigbee2mqtt/0x0017880104e45518",
+            unique_id: "0x0017880104e45518_analog_output_2_zigbee2mqtt",
+            value_template: '{{ value_json["analog_output_2"] }}',
+        };
+
+        expect(mockMQTTPublishAsync).toHaveBeenCalledWith("homeassistant/number/0x0017880104e45518/analog_output_2/config", stringify(payload), {
+            qos: 1,
+            retain: true,
+        });
+    });
+
+    it("Should apply user configuration after converter compatibility mapping", async () => {
+        settings.set(["devices", "0x18fc2600000d7ae2", "homeassistant", "climate"], {
+            modes: ["off", "heat", "auto"],
+            mode_command_template: null,
+        });
+
+        await resetExtension();
+        await flushPromises();
+
+        const call = mockMQTTPublishAsync.mock.calls.find((c) => c[0] === "homeassistant/climate/0x18fc2600000d7ae2/climate/config");
+        expect(call).toBeDefined();
+        const payload = JSON.parse(call![1] as string);
+
+        expect(payload.modes).toStrictEqual(["off", "heat", "auto"]);
+        expect(payload.mode_command_template).toBeUndefined();
+        expect(payload.mode_command_topic).toStrictEqual("zigbee2mqtt/bosch_radiator/set");
+    });
+
     it("does not throw when discovery payload override throws", async () => {
         const bosch = getZ2MEntity(devices["RBSH-TRV0-ZB-EU"]) as Device;
         assert(typeof bosch.definition?.meta?.overrideHaDiscoveryPayload === "function");
@@ -1252,6 +1523,30 @@ describe("Extension: HomeAssistant", () => {
         overrideSpy.mockRestore();
     });
 
+    it("passes device options to discovery payload overrides", async () => {
+        const bosch = getZ2MEntity(devices["RBSH-TRV0-ZB-EU"]) as Device;
+        assert(typeof bosch.definition?.meta?.overrideHaDiscoveryPayload === "function");
+        const overrideSpy = vi.spyOn(bosch.definition.meta, "overrideHaDiscoveryPayload") as MockInstance;
+        settings.set(["devices", "0x18fc2600000d7ae2", "discovery_option_marker"], "passed");
+
+        overrideSpy.mockImplementation((payload, options) => {
+            if (payload.mode_command_topic?.endsWith("/system_mode")) {
+                payload.discovery_option_marker = options?.discovery_option_marker;
+            }
+        });
+
+        await resetExtension();
+
+        expect(overrideSpy).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({discovery_option_marker: "passed"}));
+        expect(mockMQTTPublishAsync).toHaveBeenCalledWith(
+            "homeassistant/climate/0x18fc2600000d7ae2/climate/config",
+            expect.stringContaining('"discovery_option_marker":"passed"'),
+            {qos: 1, retain: true},
+        );
+
+        overrideSpy.mockRestore();
+    });
+
     it("Should discover Bosch BTH-RM230Z with a current_humidity attribute", () => {
         const payload = {
             action_template:
@@ -1275,11 +1570,11 @@ describe("Extension: HomeAssistant", () => {
             min_temp: "5",
             mode_command_topic: "zigbee2mqtt/bosch_rm230z/set",
             mode_state_template:
-                "{% set values = {'schedule':'auto','manual':'heat','pause':'off'} %}{% set value = value_json.operating_mode %}{% if value == \"manual\" %}{{ value_json.system_mode }}{% else %}{{ values[value] if value in values.keys() else 'off' }}{% endif %}",
+                "{% set active_modes = ['heat'] %}{% set fallback_mode = 'heat' %}{% set values = {'schedule':'auto','pause':'off'} %}{% set value = value_json.operating_mode %}{% set mode = value_json.system_mode %}{% if value == 'manual' %}{{ mode if mode in active_modes else fallback_mode }}{% else %}{{ values[value] if value in values.keys() else 'off' }}{% endif %}",
             mode_command_template:
-                "{% set values = { 'auto':'schedule','heat':'manual','cool':'manual','off':'pause'} %}{% if value == \"heat\" or value == \"cool\" %}{\"operating_mode\": \"manual\", \"system_mode\": \"{{ value }}\"}{% else %}{\"operating_mode\": \"{{ values[value] if value in values.keys() else 'pause' }}\"}{% endif %}",
+                "{% set active_modes = ['heat'] %}{% set values = {'auto':'schedule','off':'pause'} %}{% if value in active_modes %}{\"operating_mode\": \"manual\", \"system_mode\": \"{{ value }}\"}{% else %}{\"operating_mode\": \"{{ values[value] if value in values.keys() else 'pause' }}\"}{% endif %}",
             mode_state_topic: "zigbee2mqtt/bosch_rm230z",
-            modes: ["off", "heat", "cool", "auto"],
+            modes: ["off", "heat", "auto"],
             name: null,
             object_id: "bosch_rm230z",
             origin,
@@ -1326,6 +1621,62 @@ describe("Extension: HomeAssistant", () => {
             qos: 1,
             retain: true,
         });
+    });
+
+    it("Should use humidity of the same endpoint for multi-endpoint climate", () => {
+        const climateL1Expose = new zhc.Climate().withSetpoint("occupied_heating_setpoint", 5, 35, 0.5).withLocalTemperature().withEndpoint("l1");
+        const climateL2Expose = new zhc.Climate().withSetpoint("occupied_heating_setpoint", 5, 35, 0.5).withLocalTemperature().withEndpoint("l2");
+        const humidityL1Expose = new zhc.Numeric("humidity", zhc.access.STATE_GET).withUnit("%").withEndpoint("l1");
+        const humidityExpose = new zhc.Numeric("humidity", zhc.access.STATE_GET).withUnit("%");
+        const device = {
+            definition: {},
+            isDevice: (): boolean => true,
+            isGroup: (): boolean => false,
+            endpoint: () => undefined,
+            options: {},
+            exposes: (): zhc.Expose[] => [climateL1Expose, climateL2Expose, humidityL1Expose, humidityExpose],
+            zh: {endpoints: []},
+        } as Device;
+
+        // @ts-expect-error private
+        const configs = extension.getConfigs(device);
+        const climateL1 = configs.find((c) => c.type === "climate" && c.object_id === "climate_l1");
+        const climateL2 = configs.find((c) => c.type === "climate" && c.object_id === "climate_l2");
+        // Same endpoint humidity is preferred
+        expect(climateL1!.discovery_payload.current_humidity_template).toStrictEqual('{{ value_json["humidity_l1"] }}');
+        // Falls back to humidity without endpoint
+        expect(climateL2!.discovery_payload.current_humidity_template).toStrictEqual('{{ value_json["humidity"] }}');
+    });
+
+    it("Should discover climate with cooling-only setpoint", () => {
+        const climateExpose = new zhc.Climate()
+            .withSetpoint("occupied_cooling_setpoint", 16, 32, 0.5)
+            .withLocalTemperature()
+            .withSystemMode(["off", "cool", "auto"]);
+        const device = {
+            definition: {},
+            isDevice: (): boolean => true,
+            isGroup: (): boolean => false,
+            endpoint: () => undefined,
+            options: {},
+            exposes: (): zhc.Expose[] => [climateExpose],
+            zh: {endpoints: []},
+        } as Device;
+
+        // @ts-expect-error private
+        const configs = extension.getConfigs(device);
+        const climate = configs.find((c) => c.type === "climate");
+        expect(climate).toBeDefined();
+        expect(climate!.discovery_payload).toMatchObject({
+            temperature_command_topic: "occupied_cooling_setpoint",
+            temperature_state_template: '{{ value_json["occupied_cooling_setpoint"] }}',
+            temperature_state_topic: true,
+            min_temp: "16",
+            max_temp: "32",
+            temp_step: 0.5,
+        });
+        expect(climate!.discovery_payload).not.toHaveProperty("temperature_low_command_topic");
+        expect(climate!.discovery_payload).not.toHaveProperty("temperature_high_command_topic");
     });
 
     it("Should discover devices with cover_position", () => {
@@ -1400,6 +1751,8 @@ describe("Extension: HomeAssistant", () => {
     });
 
     it("Should discover dual cover devices", () => {
+        const coverValueTemplate =
+            '{% set motor = value_json["moving"] | default(none) %}{% set position = value_json["position"] | default(none) %}{% set state = value_json["state"] | default(none) %}{% if (motor == "UP" and position != 100) or (motor == "DOWN" and position != 0) %}{{ motor }}{% elif position == 0 %}CLOSE{% elif position == 100 %}OPEN{% elif motor == "STOP" and position is not none %}OPEN{% elif state in ["OPEN", "CLOSE"] %}{{ state }}{% else %}STOP{% endif %}';
         const payload_left = {
             availability: [
                 {
@@ -1424,12 +1777,14 @@ describe("Extension: HomeAssistant", () => {
             position_topic: "zigbee2mqtt/0xa4c138018cf95021/left",
             set_position_template: '{ "position_left": {{ position }} }',
             set_position_topic: "zigbee2mqtt/0xa4c138018cf95021/left/set",
+            state_closed: "CLOSE",
             state_closing: "DOWN",
+            state_open: "OPEN",
             state_opening: "UP",
             state_stopped: "STOP",
             state_topic: "zigbee2mqtt/0xa4c138018cf95021/left",
             unique_id: "0xa4c138018cf95021_cover_left_zigbee2mqtt",
-            value_template: '{% if "moving" in value_json and value_json["moving"] %} {{ value_json["moving"] }} {% else %} STOP {% endif %}',
+            value_template: coverValueTemplate,
         };
         const payload_right = {
             availability: [
@@ -1455,13 +1810,23 @@ describe("Extension: HomeAssistant", () => {
             position_topic: "zigbee2mqtt/0xa4c138018cf95021/right",
             set_position_template: '{ "position_right": {{ position }} }',
             set_position_topic: "zigbee2mqtt/0xa4c138018cf95021/right/set",
+            state_closed: "CLOSE",
             state_closing: "DOWN",
+            state_open: "OPEN",
             state_opening: "UP",
             state_stopped: "STOP",
             state_topic: "zigbee2mqtt/0xa4c138018cf95021/right",
             unique_id: "0xa4c138018cf95021_cover_right_zigbee2mqtt",
-            value_template: '{% if "moving" in value_json and value_json["moving"] %} {{ value_json["moving"] }} {% else %} STOP {% endif %}',
+            value_template: coverValueTemplate,
         };
+
+        const coverLeftCalls = mockMQTTPublishAsync.mock.calls.filter(
+            ([topic]) => topic === "homeassistant/cover/0xa4c138018cf95021/cover_left/config",
+        );
+
+        for (const [, actualPayload] of coverLeftCalls) {
+            console.log(JSON.parse(actualPayload));
+        }
 
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith("homeassistant/cover/0xa4c138018cf95021/cover_left/config", stringify(payload_left), {
             retain: true,
@@ -1471,6 +1836,118 @@ describe("Extension: HomeAssistant", () => {
             retain: true,
             qos: 1,
         });
+    });
+
+    it("Should derive direction-aware cover state from position for motor_state covers", () => {
+        const coverExpose = new zhc.Cover().withPosition();
+        const motorStateExpose = new zhc.Enum("motor_state", zhc.access.STATE, ["opening", "closing", "stopped"]);
+        const device = {
+            definition: {},
+            isDevice: (): boolean => true,
+            isGroup: (): boolean => false,
+            endpoint: () => undefined,
+            options: {},
+            exposes: (): zhc.Expose[] => [coverExpose, motorStateExpose],
+            zh: {endpoints: []},
+        } as Device;
+
+        // @ts-expect-error private
+        const configs = extension.getConfigs(device);
+        const cover = configs.find((c) => c.type === "cover");
+        expect(cover).toBeDefined();
+        expect(cover!.discovery_payload).toMatchObject({
+            state_opening: "opening",
+            state_closing: "closing",
+            state_open: "OPEN",
+            state_closed: "CLOSE",
+            state_stopped: "stopped",
+            value_template:
+                '{% set motor = value_json["motor_state"] | default(none) %}{% set position = value_json["position"] | default(none) %}{% set state = value_json["state"] | default(none) %}{% if (motor == "opening" and position != 100) or (motor == "closing" and position != 0) %}{{ motor }}{% elif position == 0 %}CLOSE{% elif position == 100 %}OPEN{% elif motor == "stopped" and position is not none %}OPEN{% elif state in ["OPEN", "CLOSE"] %}{{ state }}{% else %}stopped{% endif %}',
+        });
+    });
+
+    it("Should preserve motor_state and state fallback for covers without position", () => {
+        const coverExpose = new zhc.Cover();
+        const motorStateExpose = new zhc.Enum("motor_state", zhc.access.STATE, ["opening", "closing", "stopped"]);
+        const device = {
+            definition: {},
+            isDevice: (): boolean => true,
+            isGroup: (): boolean => false,
+            endpoint: () => undefined,
+            options: {},
+            exposes: (): zhc.Expose[] => [coverExpose, motorStateExpose],
+            zh: {endpoints: []},
+        } as Device;
+
+        // @ts-expect-error private
+        const configs = extension.getConfigs(device);
+        const cover = configs.find((c) => c.type === "cover");
+        expect(cover).toBeDefined();
+        expect(cover!.discovery_payload).toMatchObject({
+            state_opening: "opening",
+            state_closing: "closing",
+            state_open: "OPEN",
+            state_closed: "CLOSE",
+            state_stopped: "stopped",
+            value_template:
+                '{% set motor = value_json["motor_state"] | default(none) %}{% set position = none %}{% set state = value_json["state"] | default(none) %}{% if (motor == "opening" and position != 100) or (motor == "closing" and position != 0) %}{{ motor }}{% elif position == 0 %}CLOSE{% elif position == 100 %}OPEN{% elif motor == "stopped" and position is not none %}OPEN{% elif state in ["OPEN", "CLOSE"] %}{{ state }}{% else %}stopped{% endif %}',
+        });
+    });
+
+    it("Should discover an infrared emitter entity", () => {
+        const infraredEmitterExpose = new zhc.Text("emitter", zhc.access.SET).withHomeAssistant({
+            type: "infrared",
+            schema: "emitter",
+            valueTemplate: null,
+        });
+        const device = {
+            definition: {},
+            isDevice: (): boolean => true,
+            isGroup: (): boolean => false,
+            endpoint: () => undefined,
+            options: {},
+            exposes: (): zhc.Expose[] => [infraredEmitterExpose],
+            zh: {endpoints: []},
+        } as Device;
+
+        // @ts-expect-error private
+        const configs = extension.getConfigs(device);
+        const infrared = configs.find((c) => c.type === "infrared");
+        expect(infrared).toBeDefined();
+        expect(infrared!.discovery_payload).toMatchObject({
+            name: "Emitter",
+            schema: "emitter",
+            command_topic: true,
+            state_topic: 0,
+        });
+        expect(infrared!.discovery_payload).not.toHaveProperty("value_template");
+    });
+
+    it("Should discover an infrared receiver entity", () => {
+        const infraredReceiverExpose = new zhc.Text("receiver", zhc.access.STATE).withHomeAssistant({
+            type: "infrared",
+            schema: "receiver",
+            valueTemplate: "{{ json_value.emitter }}",
+        });
+        const device = {
+            definition: {},
+            isDevice: (): boolean => true,
+            isGroup: (): boolean => false,
+            endpoint: () => undefined,
+            options: {},
+            exposes: (): zhc.Expose[] => [infraredReceiverExpose],
+            zh: {endpoints: []},
+        } as Device;
+
+        // @ts-expect-error private
+        const configs = extension.getConfigs(device);
+        const infrared = configs.find((c) => c.type === "infrared");
+        expect(infrared).toBeDefined();
+        expect(infrared!.discovery_payload).toMatchObject({
+            name: "Receiver",
+            schema: "receiver",
+        });
+        expect(infrared!.discovery_payload).toHaveProperty("value_template");
     });
 
     it("Should discover devices with custom homeassistant.discovery_topic", async () => {
@@ -1513,7 +1990,7 @@ describe("Extension: HomeAssistant", () => {
 
         await expect(async () => {
             await controller.start();
-        }).rejects.toThrow("Home Assistant integration is not possible with attribute output!");
+        }).rejects.toThrow("Home Assistant integration requires 'output: json' under 'advanced'");
     });
 
     it("Should throw error when homeassistant.discovery_topic equals the mqtt.base_topic", async () => {
@@ -1529,7 +2006,9 @@ describe("Extension: HomeAssistant", () => {
         settings.set(["advanced", "cache_state"], false);
         mockLogger.warning.mockClear();
         await resetExtension();
-        expect(mockLogger.warning).toHaveBeenCalledWith("In order for Home Assistant integration to work properly set `cache_state: true");
+        expect(mockLogger.warning).toHaveBeenCalledWith(
+            "In order for Home Assistant integration to work properly, set `cache_state: true` under `advanced`",
+        );
     });
 
     it("Should set missing values to null", async () => {
@@ -1571,6 +2050,7 @@ describe("Extension: HomeAssistant", () => {
                 effect: null,
                 effect_color: null,
                 effect_speed: null,
+                identify: null,
                 linkquality: null,
                 state: null,
                 power_on_behavior: null,
@@ -1596,6 +2076,7 @@ describe("Extension: HomeAssistant", () => {
                 effect: null,
                 effect_color: null,
                 effect_speed: null,
+                identify: null,
                 linkquality: null,
                 state: null,
                 power_on_behavior: null,
@@ -1620,6 +2101,7 @@ describe("Extension: HomeAssistant", () => {
                 effect: null,
                 effect_color: null,
                 effect_speed: null,
+                identify: null,
                 state: "ON",
                 power_on_behavior: null,
                 update: {state: null, installed_version: -1, latest_version: -1},
@@ -1722,6 +2204,7 @@ describe("Extension: HomeAssistant", () => {
         await flushPromises();
         await vi.runOnlyPendingTimersAsync();
         await flushPromises();
+        expect(mockMQTTPublishAsync).toHaveBeenCalledWith("zigbee2mqtt/bridge/state", stringify({state: "online"}), {retain: true, qos: 1});
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith(
             "zigbee2mqtt/bulb",
             stringify({
@@ -1762,6 +2245,7 @@ describe("Extension: HomeAssistant", () => {
         await flushPromises();
         await vi.runOnlyPendingTimersAsync();
         await flushPromises();
+        expect(mockMQTTPublishAsync).toHaveBeenCalledWith("zigbee2mqtt/bridge/state", stringify({state: "online"}), {retain: true, qos: 1});
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith(
             "zigbee2mqtt/bulb",
             stringify({
@@ -2089,7 +2573,7 @@ describe("Extension: HomeAssistant", () => {
 
     it("Should discover trigger when action is published", async () => {
         const discovered = mockMQTTPublishAsync.mock.calls.filter((c) => c[0].includes("0x0017880104e45520")).map((c) => c[0]);
-        expect(discovered.length).toBe(5);
+        expect(discovered.length).toBe(6);
 
         mockMQTTPublishAsync.mockClear();
 
@@ -2126,6 +2610,7 @@ describe("Extension: HomeAssistant", () => {
             stringify({
                 action: "single",
                 battery: null,
+                identify: null,
                 linkquality: null,
                 voltage: null,
                 power_outage_count: null,
@@ -2242,7 +2727,7 @@ describe("Extension: HomeAssistant", () => {
             unique_id: "0x0017880104e45520_action_zigbee2mqtt",
             // Needs to be updated whenever one of the ACTION_*_PATTERN constants changes.
             value_template:
-                "{% set patterns = [\n{\"pattern\": '^(?P<button>(?:button_)?[a-z0-9]+)_(?P<action>(?:press|hold)(?:_release)?)$', \"groups\": [\"button\", \"action\"]},\n{\"pattern\": '^(?P<action>recall|scene)_(?P<scene>[0-2][0-9]{0,2})$', \"groups\": [\"action\", \"scene\"]},\n{\"pattern\": '^(?P<actionPrefix>region_)(?P<region>[1-9]|10)_(?P<action>enter|leave|occupied|unoccupied)$', \"groups\": [\"actionPrefix\", \"region\", \"action\"]},\n{\"pattern\": '^(?P<action>dial_rotate)_(?P<direction>left|right)_(?P<speed>step|slow|fast)$', \"groups\": [\"action\", \"direction\", \"speed\"]},\n{\"pattern\": '^(?P<action>brightness_step)(?:_(?P<direction>up|down))?$', \"groups\": [\"action\", \"direction\"]}\n] %}\n{% set action_value = value_json.action|default('') %}\n{% set ns = namespace(r=[('action', action_value)]) %}\n{% for p in patterns %}\n  {% set m = action_value|regex_findall(p.pattern) %}\n  {% if m[0] is undefined %}{% continue %}{% endif %}\n  {% for key, value in zip(p.groups, m[0]) %}\n    {% set ns.r = ns.r|rejectattr(0, 'eq', key)|list + [(key, value)] %}\n  {% endfor %}\n{% endfor %}\n{% if (ns.r|selectattr(0, 'eq', 'actionPrefix')|first) is defined %}\n  {% set ns.r = ns.r|rejectattr(0, 'eq', 'action')|list + [('action', ns.r|selectattr(0, 'eq', 'actionPrefix')|map(attribute=1)|first + ns.r|selectattr(0, 'eq', 'action')|map(attribute=1)|first)] %}\n{% endif %}\n{% set ns.r = ns.r + [('event_type', ns.r|selectattr(0, 'eq', 'action')|map(attribute=1)|first)] %}\n{{dict.from_keys(ns.r|rejectattr(0, 'in', ('action', 'actionPrefix'))|reject('eq', ('event_type', None))|reject('eq', ('event_type', '')))|to_json}}",
+                "{% set patterns = [\n{\"pattern\": '^(?P<button>(?:button_)?[a-z0-9]+)_(?P<action>(?:press|hold|single|double)(?:_release)?)$', \"groups\": [\"button\", \"action\"]},\n{\"pattern\": '^(?P<action>recall|scene)_(?P<scene>[0-9]+)$', \"groups\": [\"action\", \"scene\"]},\n{\"pattern\": '^(?P<actionPrefix>region_)(?P<region>[1-9]|10)_(?P<action>enter|leave|occupied|unoccupied)$', \"groups\": [\"actionPrefix\", \"region\", \"action\"]},\n{\"pattern\": '^(?P<action>dial_rotate)_(?P<direction>left|right)_(?P<speed>step|slow|fast)$', \"groups\": [\"action\", \"direction\", \"speed\"]},\n{\"pattern\": '^(?P<action>brightness_step|color_temperature_step|color_saturation_step|color_hue_step)(?:_(?P<direction>up|down))?$', \"groups\": [\"action\", \"direction\"]}\n] %}\n{% set action_value = value_json.action|default('') %}\n{% set ns = namespace(r=[('action', action_value)]) %}\n{% for p in patterns %}\n  {% set m = action_value|regex_findall(p.pattern) %}\n  {% if m[0] is undefined %}{% continue %}{% endif %}\n  {% for key, value in zip(p.groups, m[0]) %}\n    {% set ns.r = ns.r|rejectattr(0, 'eq', key)|list + [(key, value)] %}\n  {% endfor %}\n{% endfor %}\n{% if (ns.r|selectattr(0, 'eq', 'actionPrefix')|first) is defined %}\n  {% set ns.r = ns.r|rejectattr(0, 'eq', 'action')|list + [('action', ns.r|selectattr(0, 'eq', 'actionPrefix')|map(attribute=1)|first + ns.r|selectattr(0, 'eq', 'action')|map(attribute=1)|first)] %}\n{% endif %}\n{% set ns.r = ns.r + [('event_type', ns.r|selectattr(0, 'eq', 'action')|map(attribute=1)|first)] %}\n{{dict.from_keys(ns.r|rejectattr(0, 'in', ('action', 'actionPrefix'))|reject('eq', ('event_type', None))|reject('eq', ('event_type', '')))|to_json}}",
         };
 
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith("homeassistant/event/0x0017880104e45520/action/config", stringify(payload), {
@@ -3021,11 +3506,15 @@ describe("Extension: HomeAssistant", () => {
         settings.set(["homeassistant", "legacy_action_sensor"], true);
         await resetExtension();
 
-        // Should discovery action sensor
-        expect(mockMQTTPublishAsync).toHaveBeenCalledWith("homeassistant/sensor/0x0017880104e45520/action/config", expect.any(String), {
-            retain: true,
-            qos: 1,
+        // Should discover action sensor as a diagnostic helper instead of a primary entity.
+        const actionDiscovery = mockMQTTPublishAsync.mock.calls.find(([topic]) => topic === "homeassistant/sensor/0x0017880104e45520/action/config");
+        assert(actionDiscovery);
+        expect(JSON.parse(actionDiscovery[1])).toMatchObject({
+            entity_category: "diagnostic",
+            name: "Action",
+            object_id: "button_action",
         });
+        expect(actionDiscovery[2]).toStrictEqual({retain: true, qos: 1});
 
         // Should counter an action payload with an empty payload
         mockMQTTPublishAsync.mockClear();
@@ -3037,6 +3526,7 @@ describe("Extension: HomeAssistant", () => {
         expect(JSON.parse(mockMQTTPublishAsync.mock.calls[0][1])).toStrictEqual({
             action: "single",
             battery: null,
+            identify: null,
             linkquality: null,
             voltage: null,
             power_outage_count: null,
@@ -3047,6 +3537,7 @@ describe("Extension: HomeAssistant", () => {
         expect(JSON.parse(mockMQTTPublishAsync.mock.calls[1][1])).toStrictEqual({
             action: "",
             battery: null,
+            identify: null,
             linkquality: null,
             voltage: null,
             power_outage_count: null,

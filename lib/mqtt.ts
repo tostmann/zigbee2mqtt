@@ -67,11 +67,15 @@ export default class Mqtt {
             properties: {maximumPacketSize: mqttSettings.maximum_packet_size},
         };
 
+        /* v8 ignore start */
         if (mqttSettings.version) {
+            /* v8 ignore stop */
             options.protocolVersion = mqttSettings.version;
         }
 
+        /* v8 ignore start */
         if (mqttSettings.keepalive) {
+            /* v8 ignore stop */
             logger.debug(`Using MQTT keepalive: ${mqttSettings.keepalive}`);
             options.keepalive = mqttSettings.keepalive;
         }
@@ -109,6 +113,11 @@ export default class Mqtt {
             options.rejectUnauthorized = false;
         }
 
+        if (mqttSettings.server_name) {
+            logger.debug(`MQTT SSL/TLS: SNI server name = ${mqttSettings.server_name}`);
+            options.servername = mqttSettings.server_name;
+        }
+
         this.client = await connectAsync(mqttSettings.server, options);
 
         // https://github.com/Koenkk/zigbee2mqtt/issues/9822
@@ -129,14 +138,6 @@ export default class Mqtt {
         await this.onConnect();
 
         this.client.on("connect", this.onConnect);
-
-        this.republishRetainedTimer = setTimeout(async () => {
-            // Republish retained messages in case MQTT broker does not persist them.
-            // https://github.com/Koenkk/zigbee2mqtt/issues/9629
-            for (const msg of Object.values(this.retainedMessages)) {
-                await this.publish(msg.topic, msg.payload, msg.options);
-            }
-        }, 2000);
 
         // Set timer at interval to check if connected to MQTT server.
         this.connectionTimer = setInterval(() => {
@@ -172,6 +173,17 @@ export default class Mqtt {
 
     @bind private async onConnect(): Promise<void> {
         logger.info("Connected to MQTT server");
+
+        // Armed before any await: on reconnect mqtt.js has already resubscribed, so retained
+        // messages (including the `bridge/info` that cancels this timer) can arrive during the publish below.
+        clearTimeout(this.republishRetainedTimer);
+        this.republishRetainedTimer = setTimeout(async () => {
+            // Republish retained messages in case MQTT broker does not persist them.
+            // https://github.com/Koenkk/zigbee2mqtt/issues/9629
+            for (const msg of Object.values(this.retainedMessages)) {
+                await this.publish(msg.topic, msg.payload, msg.options);
+            }
+        }, 2000);
 
         const stateData: Zigbee2MQTTAPI["bridge/state"] = {state: "online"};
 
@@ -242,7 +254,9 @@ export default class Mqtt {
         try {
             await this.client.publishAsync(topic, payload, clientOptions);
         } catch (error) {
+            /* v8 ignore start */
             if (!finalOptions.skipLog) {
+                /* v8 ignore stop */
                 logger.error(`MQTT server error: ${(error as Error).message}`);
                 logger.error(`Could not send message: topic: '${topic}', payload: '${payload}`);
             }

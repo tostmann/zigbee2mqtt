@@ -7,7 +7,7 @@ import {flushPromises} from "../mocks/utils";
 import {devices, events as mockZHEvents, returnDevices} from "../mocks/zigbeeHerdsman";
 
 import assert from "node:assert";
-import stringify from "json-stable-stringify-without-jsonify";
+import {stringify} from "../../lib/util/stringify";
 import {Controller} from "../../lib/controller";
 import Availability from "../../lib/extension/availability";
 import * as settings from "../../lib/util/settings";
@@ -631,6 +631,19 @@ describe("Extension: Availability", () => {
         await setTimeAndAdvanceTimers(utils.minutes(10.5));
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(5);
         expect(devices.QBKG03LM.ping).toHaveBeenCalledTimes(4);
+    });
+
+    it("clamps the ping delay to the maximum supported timeout", async () => {
+        // `setTimeout` takes a 32-bit signed integer and coerces anything above it to `1`. A delay can exceed
+        // that either directly, through a long `timeout`, or gradually, once `backoff` has multiplied a normal
+        // one over successive failures. Unclamped, that turns an ever-longer wait into a tight ping loop.
+        settings.set(["devices", devices.bulb_color.ieeeAddr, "availability"], {timeout: 40000, max_jitter: 0}); // ~27.8 days
+        await resetExtension();
+
+        // unclamped, the delay collapses to 1ms, so pings would already be looping by now
+        await setTimeAndAdvanceTimers(utils.seconds(1));
+
+        expect(devices.bulb_color.ping).not.toHaveBeenCalled();
     });
 
     it("allows to disable backoff", async () => {

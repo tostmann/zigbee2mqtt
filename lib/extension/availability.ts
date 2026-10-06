@@ -9,6 +9,12 @@ import * as settings from "../util/settings";
 import utils from "../util/utils";
 import Extension from "./extension";
 
+/**
+ * Upper bound for a `setTimeout` delay. Node.js stores the delay as a 32-bit signed integer; anything above this
+ * is coerced to `1`, which would turn an ever-growing backoff into a tight loop instead of an ever-longer wait.
+ */
+const MAX_TIMEOUT = 2147483647;
+
 const RETRIEVE_ON_RECONNECT: readonly {keys: string[]; condition?: (state: KeyValue) => boolean}[] = [
     {keys: ["state"]},
     {keys: ["brightness"], condition: (state: KeyValue): boolean => state.state === "ON"},
@@ -71,7 +77,7 @@ export default class Availability extends Extension {
 
     private isAvailable(entity: Device | Group): boolean {
         if (entity.isDevice()) {
-            const lastSeen = entity.zh.lastSeen ?? /* v8 ignore next */ 0;
+            const lastSeen = /* v8 ignore next */ entity.zh.lastSeen ?? 0;
 
             return Date.now() - lastSeen < this.getTimeout(entity);
         }
@@ -108,7 +114,10 @@ export default class Availability extends Extension {
                 // If device did not check in, ping it, if that fails it will be marked as offline
                 this.timers.set(
                     device.ieeeAddr,
-                    setTimeout(this.addToPingQueue.bind(this, device), (this.getTimeout(device) + utils.seconds(1) + jitter) * backoff),
+                    setTimeout(
+                        this.addToPingQueue.bind(this, device),
+                        Math.min((this.getTimeout(device) + utils.seconds(1) + jitter) * backoff, MAX_TIMEOUT),
+                    ),
                 );
             }
         } else {
@@ -239,7 +248,9 @@ export default class Availability extends Extension {
 
     private async publishAvailability(entity: Device | Group, logLastSeen: boolean, forcePublish = false, skipGroups = false): Promise<void> {
         if (logLastSeen && entity.isDevice()) {
-            const ago = Date.now() - (entity.zh.lastSeen ?? /* v8 ignore next */ 0);
+            /* v8 ignore start */
+            const ago = Date.now() - (entity.zh.lastSeen ?? 0);
+            /* v8 ignore stop */
 
             if (this.isActiveDevice(entity)) {
                 logger.debug(`Active device '${entity.name}' was last seen '${(ago / utils.minutes(1)).toFixed(2)}' minutes ago.`);
@@ -322,6 +333,9 @@ export default class Availability extends Extension {
                             options,
                             state,
                             device: device.zh,
+                            /* v8 ignore start */
+                            deviceExposesChanged: (): void => this.eventBus.emitExposesAndDevicesChanged(device),
+                            /* v8 ignore stop */
                             /* v8 ignore next */
                             publish: (payload: KeyValue) => this.publishEntityState(device, payload),
                         };

@@ -1,6 +1,5 @@
 import {randomInt} from "node:crypto";
 import bind from "bind-decorator";
-import stringify from "json-stable-stringify-without-jsonify";
 import type {Events as ZHEvents} from "zigbee-herdsman";
 import {Controller} from "zigbee-herdsman";
 import type {StartResult} from "zigbee-herdsman/dist/adapter/tstype";
@@ -9,6 +8,7 @@ import Group from "./model/group";
 import data from "./util/data";
 import logger from "./util/logger";
 import * as settings from "./util/settings";
+import {stringify} from "./util/stringify";
 import utils from "./util/utils";
 
 const entityIDRegex = /^(.+?)(?:\/([^/]+))?$/;
@@ -61,7 +61,7 @@ export default class Zigbee {
 
         logger.debug(
             () =>
-                `Using zigbee-herdsman with settings: '${stringify(JSON.stringify(herdsmanSettings).replaceAll(JSON.stringify(herdsmanSettings.network.networkKey), '"HIDDEN"'))}'`,
+                `Using zigbee-herdsman with settings: '${stringify(herdsmanSettings).replaceAll(stringify(herdsmanSettings.network.networkKey), '"HIDDEN"')}'`,
         );
 
         let startResult: StartResult;
@@ -102,7 +102,9 @@ export default class Zigbee {
         });
         this.#herdsman.on("deviceInterview", async (data: ZHEvents.DeviceInterviewPayload) => {
             const device = this.resolveDevice(data.device.ieeeAddr);
-            /* v8 ignore next */ if (!device) return; // Prevent potential race
+            /* v8 ignore start */
+            if (!device) return; // Prevent potential race
+            /* v8 ignore stop */
             await device.resolveDefinition();
             const d = {device, status: data.status};
             this.logDeviceInterview(d);
@@ -110,7 +112,9 @@ export default class Zigbee {
         });
         this.#herdsman.on("deviceJoined", async (data: ZHEvents.DeviceJoinedPayload) => {
             const device = this.resolveDevice(data.device.ieeeAddr);
-            /* v8 ignore next */ if (!device) return; // Prevent potential race
+            /* v8 ignore start */
+            if (!device) return; // Prevent potential race
+            /* v8 ignore stop */
             await device.resolveDefinition();
             logger.info(`Device '${device.name}' joined`);
             this.eventBus.emitDeviceJoined({device});
@@ -356,7 +360,9 @@ export default class Zigbee {
             // First split the input token by the latest slash
             const match = id.match(entityIDRegex);
 
+            /* v8 ignore start */
             if (match) {
+                /* v8 ignore stop */
                 // Get the resulting IDs from the match
                 entityName = match[1];
                 deviceOrGroup = this.resolveEntity(entityName);
@@ -467,7 +473,11 @@ export default class Zigbee {
         return this.resolveGroup(id);
     }
 
-    removeGroupFromLookup(id: number): void {
-        this.groupLookup.delete(id);
+    removeDeviceFromLookup(ieee: string): boolean {
+        return this.deviceLookup.delete(ieee);
+    }
+
+    removeGroupFromLookup(id: number): boolean {
+        return this.groupLookup.delete(id);
     }
 }
