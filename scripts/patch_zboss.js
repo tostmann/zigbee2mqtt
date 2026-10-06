@@ -138,43 +138,15 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
 // (link-layer ACK wait + command response wait) then abort z2m startup. Raise
 // both. Harmless on the fast USB transport. Tunable; 30 s validated end-to-end.
 // ---------------------------------------------------------------------------
-applyPatch("adapter/zboss/uart.js", [
-    ["waitFor(sequence, timeout = 2000)", "waitFor(sequence, timeout = 30000)"],
-    // Reconnect fix (2026-07-24, bench-proven): closePort() destroys the socket
-    // but never unpipes the persistent this.writer from it. Node does NOT
-    // auto-unpipe on socket.destroy(), so on a reconnect (the fork's
-    // restore->reboot->stop()->connect() flow, or any coordinator reboot over a
-    // surviving TCP link) the writer ends up piped to BOTH the dead old socket
-    // and the new one; the dead socket's backpressure wedges the Readable and
-    // the 2nd+ frame after reconnect never reaches the wire -> 30 s timeout ->
-    // "Failed to start zigbee-herdsman". Unpipe the writer at the top of
-    // closePort() so only the live port is ever a pipe target.
-    [
-        "    async closePort() {\n        if (this.serialPort?.isOpen) {",
-        "    async closePort() {\n        this.writer.unpipe();\n        if (this.serialPort?.isOpen) {",
-    ],
-    // Reader-death on remote FIN (2026-07-30, bench-proven root cause of the
-    // "factory reset over TCP times out" class): when the TCP peer closes the
-    // connection (CDC2NET bridge drops clients on the radio's ROM banner, coex
-    // NCP reboots), the socket emits 'end' and pipe()'s default end:true then
-    // calls this.reader.end() — the Transform is FINISHED for good. The
-    // inReset branch of onPortClose reopens in place (wait 3 s + openPort) and
-    // pipes the new socket into that dead reader: every write is a silent
-    // ERR_STREAM_WRITE_AFTER_END, so the post-reboot boot-ready frame never
-    // reaches onPackage and execCommand(NCP_RESET) times out. Timing was
-    // measured NOT to be the issue (boot frame arrives ~1.6 s after reset,
-    // replayed by the bridge on reconnect at ~4.5 s — well inside any timeout).
-    // driver.stop()+connect() (the restore flow) never hit this because
-    // destroy() emits no 'end'. Fix: never let the source end() the reader.
-    [
-        "this.serialPort.pipe(this.reader);",
-        "this.serialPort.pipe(this.reader, { end: false });",
-    ],
-    [
-        "this.socketPort.pipe(this.reader);",
-        "this.socketPort.pipe(this.reader, { end: false });",
-    ],
-]);
+applyPatch("adapter/zboss/uart.js", [["waitFor(sequence, timeout = 2000)", "waitFor(sequence, timeout = 30000)"]]);
+
+// TCP reconnect wedge (writer piped to a dead socket) and reader death on a
+// remote FIN — formerly patched here as `this.writer.unpipe()` in closePort()
+// and `pipe(this.reader, { end: false })` — are UPSTREAM as of
+// zigbee-herdsman 11.0.0 (PR Koenkk/zigbee-herdsman#1872, unified transport:
+// no reader/writer pipes anymore, data arrives as transport events). The three
+// uart.js entries were removed during the 10.4.1 -> 11.0.0 re-pin; their
+// anchors no longer exist.
 applyPatch("adapter/zboss/driver.js", [
     ["execCommand(commandId, params = {}, timeout = 10000)", "execCommand(commandId, params = {}, timeout = 30000)"],
     // Upstream's reset() passes an EXPLICIT 10000 that bypasses the raised
@@ -210,7 +182,10 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
 // ---------------------------------------------------------------------------
 // Restore gate + truthful backup header (2026-07-30).
 //
-// (1) Backup header fix: backup() sourced panId/extendedPanId/channel from
+// (1) Backup header fix (since zigbee-herdsman 10.9.6 / PR #1891 the driver
+//     refreshes netInfo after formation, so this override is now belt and
+//     braces — kept because the structured values are read live from the chip):
+//     backup() sourced panId/extendedPanId/channel from
 //     driver.netInfo — herdsman's CACHED network parameters. A backup written
 //     in the same run that FORMED the network therefore carried the
 //     PRE-formation pan/channel in its unified-format header while raw_nvram
@@ -276,30 +251,9 @@ applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
     ],
 ]);
 
-// permitJoin() silent no-op (2026-07-30): the whole method body sits inside
-// `if (this.driver.isInitialized())` with NO else — called while the driver is
-// not initialised (start/stop races), the request simply evaporates: no log,
-// no error, z2m still reports the permit as ok. During the 29.07 bench
-// campaign this exact shape cost hours ("network won't open under z2m").
-// Make the branch loud. Deliberately log-only, no throw: the guard also
-// covers internal timer-driven calls around shutdown, where a throw would
-// surface as an unhandled rejection.
-applyPatch("adapter/zboss/adapter/zbossAdapter.js", [
-    [
-        `                    await this.sendZdo(ZSpec.BLANK_EUI64, ZSpec.BroadcastAddress.DEFAULT, clusterId, zdoPayload, true);
-                }
-            }
-        }
-    }`,
-        `                    await this.sendZdo(ZSpec.BLANK_EUI64, ZSpec.BroadcastAddress.DEFAULT, clusterId, zdoPayload, true);
-                }
-            }
-        }
-        else {
-            logger_1.logger.error(\`permitJoin(\${seconds}) IGNORED - ZBOSS driver not initialized (adapter starting or stopped); the network was NOT opened/closed\`, NS);
-        }
-    }`,
-    ],
-]);
+// permitJoin() silent no-op — formerly made loud here — is UPSTREAM as of
+// zigbee-herdsman 11.0.0 (PR Koenkk/zigbee-herdsman#1872 removed the
+// isInitialized() guard around permitJoin, the fix proposed in
+// Koenkk/zigbee-herdsman#1829). Entry removed during the 10.4.1 -> 11.0.0 re-pin.
 
 console.log("[ZBOSS Patch] Done.");
