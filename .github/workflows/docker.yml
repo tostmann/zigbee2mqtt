@@ -21,14 +21,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # pnpm comes from package.json "packageManager"; pnpm 11 and
+      # zigbee-herdsman 11 need Node >= 22.13 (same setup as upstream ci.yml)
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: 24
+          cache: pnpm
 
       - name: Install dependencies and build
         run: |
-          npm install -g pnpm
           pnpm install --frozen-lockfile
           pnpm run build
 
